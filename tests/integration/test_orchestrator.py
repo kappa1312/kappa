@@ -26,7 +26,8 @@ class TestKappaOrchestrator:
 
         assert len(tasks) > 0
         assert all("id" in task for task in tasks)
-        assert all("name" in task for task in tasks)
+        # Check for both 'name' (legacy) and 'title' (new) for compatibility
+        assert all("name" in task or "title" in task for task in tasks)
 
     @pytest.mark.asyncio
     @patch("src.graph.builder.build_kappa_graph")

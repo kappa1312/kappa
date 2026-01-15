@@ -3,7 +3,17 @@
 import pytest
 
 from src.decomposition.dependency_resolver import DependencyResolver
-from src.decomposition.models import Complexity, Task, TaskCategory
+from src.decomposition.models import (
+    Complexity,
+    DependencyGraph,
+    FileConflict,
+    ProjectRequirements,
+    ProjectType,
+    SessionType,
+    Task,
+    TaskCategory,
+    TaskSpec,
+)
 from src.decomposition.parser import SpecificationParser
 from src.decomposition.task_generator import TaskGenerator
 
@@ -160,7 +170,8 @@ class TestTaskGenerator:
         tasks = await generator.generate(spec)
 
         # Should have tasks in multiple waves
-        waves = set(t.wave for t in tasks)
+        # TaskSpec uses wave_number, legacy Task uses wave
+        waves = set(getattr(t, 'wave_number', getattr(t, 'wave', 0)) for t in tasks)
         assert len(waves) > 1
 
 
@@ -196,3 +207,373 @@ class TestTaskModel:
         assert "Create User Model" in prompt
         assert "src/models/user.py" in prompt
         assert "model" in prompt
+
+
+class TestTaskSpec:
+    """Tests for TaskSpec model."""
+
+    def test_task_spec_creation(self) -> None:
+        """Test creating a TaskSpec."""
+        task = TaskSpec(
+            id="task-1",
+            title="Create User Model",
+            description="Define the User model",
+            session_type=SessionType.TERMINAL,
+            dependencies=[],
+            files_to_create=["src/models/user.py"],
+            files_to_modify=[],
+        )
+
+        assert task.id == "task-1"
+        assert task.title == "Create User Model"
+        assert task.session_type == SessionType.TERMINAL
+        assert 0 <= task.priority <= 10  # Priority is in valid range
+        assert task.estimated_duration_minutes == 30
+
+    def test_task_spec_with_dependencies(self) -> None:
+        """Test TaskSpec with dependencies."""
+        task = TaskSpec(
+            id="task-2",
+            title="Create Routes",
+            description="Create API routes",
+            session_type=SessionType.TERMINAL,
+            dependencies=["task-1"],
+            files_to_create=["src/routes/user.py"],
+            files_to_modify=[],
+            requires_context_from=["task-1"],
+        )
+
+        assert "task-1" in task.dependencies
+        assert "task-1" in task.requires_context_from
+
+    def test_task_spec_validation(self) -> None:
+        """Test TaskSpec validation."""
+        task = TaskSpec(
+            id="task-1",
+            title="Test",
+            description="Test task",
+            session_type=SessionType.TERMINAL,
+            dependencies=[],
+            files_to_create=[],
+            files_to_modify=[],
+            priority=5,
+            estimated_duration_minutes=60,
+        )
+
+        assert 0 <= task.priority <= 10
+        assert task.estimated_duration_minutes > 0
+
+    def test_task_spec_serialization(self) -> None:
+        """Test TaskSpec serialization."""
+        task = TaskSpec(
+            id="task-1",
+            title="Test Task",
+            description="Test description",
+            session_type=SessionType.WEB,
+            dependencies=["dep-1"],
+            files_to_create=["file.py"],
+            files_to_modify=["other.py"],
+        )
+
+        data = task.model_dump()
+
+        assert data["id"] == "task-1"
+        assert data["title"] == "Test Task"
+        assert data["session_type"] == "web"
+
+
+class TestProjectRequirements:
+    """Tests for ProjectRequirements model."""
+
+    def test_project_requirements_creation(self) -> None:
+        """Test creating ProjectRequirements."""
+        req = ProjectRequirements(
+            name="test-project",
+            description="A test project",
+            project_type=ProjectType.API,
+            tech_stack={"framework": "express", "language": "typescript"},
+            features=["auth", "crud"],
+            pages=[],
+            integrations=[],
+            constraints=[],
+        )
+
+        assert req.name == "test-project"
+        assert req.project_type == ProjectType.API
+        assert "framework" in req.tech_stack
+
+    def test_project_requirements_defaults(self) -> None:
+        """Test ProjectRequirements defaults."""
+        req = ProjectRequirements(
+            name="test",
+            description="Test",
+            project_type=ProjectType.WEBSITE,
+            tech_stack={},
+            features=[],
+            pages=[],
+            integrations=[],
+            constraints=[],
+        )
+
+        assert req.priority == "normal"
+        assert req.timeline is None
+
+    def test_project_requirements_serialization(self) -> None:
+        """Test ProjectRequirements serialization."""
+        req = ProjectRequirements(
+            name="test",
+            description="Test",
+            project_type=ProjectType.DASHBOARD,
+            tech_stack={"framework": "react"},
+            features=["analytics"],
+            pages=["overview", "settings"],
+            integrations=["stripe"],
+            constraints=["mobile-first"],
+        )
+
+        data = req.model_dump()
+
+        assert data["project_type"] == "dashboard"
+        assert len(data["pages"]) == 2
+
+
+class TestDependencyGraph:
+    """Tests for DependencyGraph model."""
+
+    def test_dependency_graph_creation(self) -> None:
+        """Test creating a DependencyGraph."""
+        graph = DependencyGraph(
+            nodes={},
+            edges={},
+            waves=[],
+        )
+
+        assert graph.total_waves == 0
+        assert len(graph.nodes) == 0
+
+    def test_add_task_to_graph(self) -> None:
+        """Test adding a task to the graph."""
+        graph = DependencyGraph(nodes={}, edges={}, waves=[])
+
+        task = TaskSpec(
+            id="task-1",
+            title="Test",
+            description="Test",
+            session_type=SessionType.TERMINAL,
+            dependencies=[],
+            files_to_create=[],
+            files_to_modify=[],
+        )
+
+        graph.add_task(task)
+
+        assert "task-1" in graph.nodes
+        assert graph.get_task("task-1") == task
+
+    def test_get_dependents(self) -> None:
+        """Test getting task dependents."""
+        graph = DependencyGraph(
+            nodes={},
+            edges={"task-1": [], "task-2": ["task-1"], "task-3": ["task-1"]},
+            waves=[],
+        )
+
+        dependents = graph.get_dependents("task-1")
+
+        assert "task-2" in dependents
+        assert "task-3" in dependents
+
+    def test_is_ready(self) -> None:
+        """Test checking if task is ready."""
+        graph = DependencyGraph(
+            nodes={},
+            edges={"task-1": [], "task-2": ["task-1"]},
+            waves=[],
+        )
+
+        # task-1 has no dependencies, should be ready
+        assert graph.is_ready("task-1", set())
+
+        # task-2 depends on task-1, should not be ready
+        assert not graph.is_ready("task-2", set())
+
+        # task-2 should be ready after task-1 completes
+        assert graph.is_ready("task-2", {"task-1"})
+
+    def test_total_waves_property(self) -> None:
+        """Test total_waves property."""
+        graph = DependencyGraph(
+            nodes={},
+            edges={},
+            waves=[["task-1"], ["task-2", "task-3"], ["task-4"]],
+        )
+
+        assert graph.total_waves == 3
+
+
+class TestFileConflict:
+    """Tests for FileConflict model."""
+
+    def test_file_conflict_creation(self) -> None:
+        """Test creating a FileConflict."""
+        conflict = FileConflict(
+            file_path="src/models/user.py",
+            task_ids=["task-1", "task-2"],
+            wave_number=1,
+            conflict_type="write",
+        )
+
+        assert conflict.file_path == "src/models/user.py"
+        assert len(conflict.task_ids) == 2
+        assert conflict.wave_number == 1
+
+    def test_file_conflict_serialization(self) -> None:
+        """Test FileConflict serialization."""
+        conflict = FileConflict(
+            file_path="test.py",
+            task_ids=["a", "b"],
+            wave_number=0,
+            conflict_type="modify",
+            description="Both tasks modify test.py",
+        )
+
+        data = conflict.model_dump()
+
+        assert data["file_path"] == "test.py"
+        assert data["description"] == "Both tasks modify test.py"
+
+
+class TestProjectType:
+    """Tests for ProjectType enum."""
+
+    def test_project_types(self) -> None:
+        """Test all project types exist."""
+        assert ProjectType.WEBSITE.value == "website"
+        assert ProjectType.API.value == "api"
+        assert ProjectType.DASHBOARD.value == "dashboard"
+        assert ProjectType.CLI_TOOL.value == "cli_tool"
+        assert ProjectType.LIBRARY.value == "library"
+        assert ProjectType.MOBILE_APP.value == "mobile_app"
+
+
+class TestSessionType:
+    """Tests for SessionType enum."""
+
+    def test_session_types(self) -> None:
+        """Test all session types exist."""
+        assert SessionType.TERMINAL.value == "terminal"
+        assert SessionType.WEB.value == "web"
+        assert SessionType.NATIVE.value == "native"
+        assert SessionType.EXTENSION.value == "extension"
+
+
+class TestDependencyResolverWithTaskSpec:
+    """Tests for DependencyResolver with TaskSpec objects."""
+
+    def test_resolve_with_task_specs(self) -> None:
+        """Test resolving dependencies with TaskSpec objects."""
+        tasks = [
+            TaskSpec(
+                id="task-1",
+                title="Setup",
+                description="Setup project",
+                session_type=SessionType.TERMINAL,
+                dependencies=[],
+                files_to_create=["package.json"],
+                files_to_modify=[],
+            ),
+            TaskSpec(
+                id="task-2",
+                title="Models",
+                description="Create models",
+                session_type=SessionType.TERMINAL,
+                dependencies=["task-1"],
+                files_to_create=["src/models.py"],
+                files_to_modify=[],
+            ),
+            TaskSpec(
+                id="task-3",
+                title="Routes",
+                description="Create routes",
+                session_type=SessionType.TERMINAL,
+                dependencies=["task-1"],
+                files_to_create=["src/routes.py"],
+                files_to_modify=[],
+            ),
+            TaskSpec(
+                id="task-4",
+                title="Tests",
+                description="Create tests",
+                session_type=SessionType.TERMINAL,
+                dependencies=["task-2", "task-3"],
+                files_to_create=["tests/test_app.py"],
+                files_to_modify=[],
+            ),
+        ]
+
+        resolver = DependencyResolver(tasks)
+        graph = resolver.resolve()
+
+        assert isinstance(graph, DependencyGraph)
+        assert graph.total_waves >= 2
+        assert "task-1" in graph.waves[0]
+
+    def test_detect_file_conflicts(self) -> None:
+        """Test detecting file conflicts."""
+        tasks = [
+            TaskSpec(
+                id="task-1",
+                title="Task A",
+                description="Task A",
+                session_type=SessionType.TERMINAL,
+                dependencies=[],
+                files_to_create=["shared.py"],
+                files_to_modify=[],
+                wave_number=0,
+            ),
+            TaskSpec(
+                id="task-2",
+                title="Task B",
+                description="Task B",
+                session_type=SessionType.TERMINAL,
+                dependencies=[],
+                files_to_create=["shared.py"],  # Same file!
+                files_to_modify=[],
+                wave_number=0,
+            ),
+        ]
+
+        resolver = DependencyResolver(tasks)
+        resolver.resolve()
+        conflicts = resolver.detect_conflicts()
+
+        assert len(conflicts) > 0
+        assert conflicts[0].file_path == "shared.py"
+
+    def test_no_cycles_in_valid_graph(self) -> None:
+        """Test that valid graphs have no cycles."""
+        tasks = [
+            TaskSpec(
+                id="task-1",
+                title="A",
+                description="A",
+                session_type=SessionType.TERMINAL,
+                dependencies=[],
+                files_to_create=[],
+                files_to_modify=[],
+            ),
+            TaskSpec(
+                id="task-2",
+                title="B",
+                description="B",
+                session_type=SessionType.TERMINAL,
+                dependencies=["task-1"],
+                files_to_create=[],
+                files_to_modify=[],
+            ),
+        ]
+
+        resolver = DependencyResolver(tasks)
+        # Should not raise
+        graph = resolver.resolve()
+        assert graph is not None
