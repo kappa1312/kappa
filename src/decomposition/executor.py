@@ -1,16 +1,20 @@
-"""Parallel task executor for Kappa.
+"""
+Parallel task executor for Kappa.
 
 This module provides the infrastructure for executing tasks in parallel
-using Claude sessions, with proper concurrency control and result tracking.
+using Claude sessions, with proper concurrency control, context sharing,
+and result tracking.
 """
 
 import asyncio
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
-from src.decomposition.models import TaskSpec
+from src.decomposition.models import TaskSpec, DependencyGraph
+from src.sessions.base import SessionConfig, SessionResult, SessionStatus
+from src.prompts.builder import PromptBuilder, PromptContext, get_prompt_builder
 
 
 # =============================================================================
@@ -32,6 +36,9 @@ class TaskExecutionResult:
         session_id: str | None = None,
         duration_seconds: float = 0.0,
         tokens_used: int = 0,
+        wave_number: int | None = None,
+        exports: dict[str, list[str]] | None = None,
+        types_exported: list[str] | None = None,
     ):
         self.task_id = task_id
         self.success = success
@@ -42,6 +49,9 @@ class TaskExecutionResult:
         self.session_id = session_id
         self.duration_seconds = duration_seconds
         self.tokens_used = tokens_used
+        self.wave_number = wave_number
+        self.exports = exports or {}
+        self.types_exported = types_exported or []
         self.completed_at = datetime.utcnow().isoformat()
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,8 +66,32 @@ class TaskExecutionResult:
             "session_id": self.session_id,
             "duration_seconds": self.duration_seconds,
             "tokens_used": self.tokens_used,
+            "wave_number": self.wave_number,
+            "exports": self.exports,
+            "types_exported": self.types_exported,
             "completed_at": self.completed_at,
         }
+
+    @classmethod
+    def from_session_result(
+        cls,
+        task_id: str,
+        result: SessionResult,
+        wave_number: int | None = None,
+    ) -> "TaskExecutionResult":
+        """Create from SessionResult."""
+        return cls(
+            task_id=task_id,
+            success=result.is_success(),
+            output=result.stdout,
+            error=result.error_message,
+            files_created=result.files_created,
+            files_modified=result.files_modified,
+            session_id=result.session_id,
+            duration_seconds=result.duration_seconds or 0.0,
+            tokens_used=result.token_usage.get("total", 0),
+            wave_number=wave_number,
+        )
 
 
 class WaveExecutionResult:
@@ -101,6 +135,22 @@ class WaveExecutionResult:
         """Get total tokens used."""
         return sum(r.tokens_used for r in self.results)
 
+    @property
+    def all_files_created(self) -> list[str]:
+        """Get all files created in this wave."""
+        files = []
+        for r in self.results:
+            files.extend(r.files_created)
+        return list(set(files))
+
+    @property
+    def all_files_modified(self) -> list[str]:
+        """Get all files modified in this wave."""
+        files = []
+        for r in self.results:
+            files.extend(r.files_modified)
+        return list(set(files))
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -111,8 +161,18 @@ class WaveExecutionResult:
             "success_rate": self.success_rate,
             "total_duration": self.total_duration,
             "total_tokens": self.total_tokens,
+            "all_files_created": self.all_files_created,
+            "all_files_modified": self.all_files_modified,
             "completed_at": self.completed_at,
         }
+
+
+# =============================================================================
+# EXECUTION CALLBACK TYPE
+# =============================================================================
+
+
+ExecutionCallback = Callable[[str, TaskExecutionResult], None]
 
 
 # =============================================================================
@@ -144,6 +204,8 @@ class ParallelExecutor:
         self,
         max_concurrent: int = 5,
         timeout: int = 600,
+        workspace: str = ".",
+        use_terminal_manager: bool = True,
     ):
         """
         Initialize parallel executor.
@@ -151,17 +213,60 @@ class ParallelExecutor:
         Args:
             max_concurrent: Maximum concurrent tasks (default 5).
             timeout: Timeout per task in seconds (default 600).
+            workspace: Default workspace directory.
+            use_terminal_manager: Whether to use new TerminalSessionManager.
         """
         self.max_concurrent = max_concurrent
         self.timeout = timeout
+        self.workspace = workspace
+        self.use_terminal_manager = use_terminal_manager
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_sessions: dict[str, str] = {}  # task_id -> session_id
+        self._prompt_builder = get_prompt_builder()
+        self._callbacks: list[ExecutionCallback] = []
+
+        # Session manager (lazy init)
+        self._session_manager = None
+
+    def add_callback(self, callback: ExecutionCallback) -> None:
+        """Add a callback for task completion events."""
+        self._callbacks.append(callback)
+
+    def remove_callback(self, callback: ExecutionCallback) -> None:
+        """Remove a callback."""
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    def _emit_callback(self, task_id: str, result: TaskExecutionResult) -> None:
+        """Emit callback to all registered listeners."""
+        for callback in self._callbacks:
+            try:
+                callback(task_id, result)
+            except Exception as e:
+                logger.warning(f"Callback error: {e}")
+
+    async def _get_session_manager(self):
+        """Get or create session manager."""
+        if self._session_manager is None:
+            try:
+                from src.sessions.terminal import TerminalSessionManager
+                self._session_manager = TerminalSessionManager(
+                    max_concurrent=self.max_concurrent,
+                    default_config=SessionConfig(
+                        timeout_seconds=self.timeout,
+                        working_directory=self.workspace,
+                    ),
+                )
+            except ImportError:
+                logger.warning("TerminalSessionManager not available")
+        return self._session_manager
 
     async def execute_wave(
         self,
         task_ids: list[str],
         state: dict[str, Any],
         wave_number: int = 0,
+        context: PromptContext | None = None,
     ) -> WaveExecutionResult:
         """
         Execute all tasks in a wave in parallel.
@@ -170,6 +275,7 @@ class ParallelExecutor:
             task_ids: List of task IDs to execute.
             state: Current Kappa state with tasks and context.
             wave_number: Wave number for logging.
+            context: Optional PromptContext for shared context.
 
         Returns:
             WaveExecutionResult with all task results.
@@ -183,9 +289,17 @@ class ParallelExecutor:
             logger.warning(f"No tasks found for IDs: {task_ids}")
             return WaveExecutionResult(wave_number=wave_number, results=[])
 
+        # Create context if not provided
+        if context is None:
+            context = PromptContext(
+                project_name=state.get("project_name", "Unknown"),
+                workspace=state.get("workspace_path", self.workspace),
+                tech_stack=state.get("global_context", {}).get("tech_stack", {}),
+            )
+
         # Execute all tasks in parallel with semaphore
         coroutines = [
-            self._execute_with_semaphore(task, state)
+            self._execute_with_semaphore(task, state, wave_number, context, task_ids)
             for task in tasks
         ]
 
@@ -195,15 +309,17 @@ class ParallelExecutor:
         task_results = []
         for task, result in zip(tasks, results):
             if isinstance(result, Exception):
-                task_results.append(
-                    TaskExecutionResult(
-                        task_id=task.id,
-                        success=False,
-                        error=str(result),
-                    )
+                error_result = TaskExecutionResult(
+                    task_id=task.id,
+                    success=False,
+                    error=str(result),
+                    wave_number=wave_number,
                 )
+                task_results.append(error_result)
+                self._emit_callback(task.id, error_result)
             else:
                 task_results.append(result)
+                self._emit_callback(task.id, result)
 
         wave_result = WaveExecutionResult(
             wave_number=wave_number,
@@ -222,6 +338,7 @@ class ParallelExecutor:
         self,
         task: TaskSpec | dict[str, Any],
         state: dict[str, Any],
+        context: PromptContext | None = None,
     ) -> TaskExecutionResult:
         """
         Execute a single task.
@@ -229,6 +346,7 @@ class ParallelExecutor:
         Args:
             task: TaskSpec or task dict to execute.
             state: Current Kappa state.
+            context: Optional PromptContext.
 
         Returns:
             TaskExecutionResult.
@@ -237,18 +355,87 @@ class ParallelExecutor:
         if isinstance(task, dict):
             task = TaskSpec(**task)
 
-        return await self._execute_task_internal(task, state)
+        if context is None:
+            context = PromptContext(
+                project_name=state.get("project_name", "Unknown"),
+                workspace=state.get("workspace_path", self.workspace),
+            )
+
+        return await self._execute_task_internal(task, state, context)
+
+    async def execute_graph(
+        self,
+        graph: DependencyGraph,
+        state: dict[str, Any],
+        context: PromptContext | None = None,
+    ) -> list[WaveExecutionResult]:
+        """
+        Execute all tasks in a dependency graph wave by wave.
+
+        Args:
+            graph: DependencyGraph with tasks and waves.
+            state: Current Kappa state.
+            context: Optional PromptContext.
+
+        Returns:
+            List of WaveExecutionResult for each wave.
+        """
+        results = []
+
+        if context is None:
+            context = PromptContext(
+                project_name=state.get("project_name", "Unknown"),
+                workspace=state.get("workspace_path", self.workspace),
+            )
+
+        for wave_number in range(graph.total_waves):
+            wave_task_ids = graph.waves[wave_number]
+            logger.info(f"Starting wave {wave_number} with {len(wave_task_ids)} tasks")
+
+            wave_result = await self.execute_wave(
+                task_ids=wave_task_ids,
+                state=state,
+                wave_number=wave_number,
+                context=context,
+            )
+
+            results.append(wave_result)
+
+            # Update context with wave outputs
+            for task_result in wave_result.results:
+                if task_result.success:
+                    context.add_task_output(task_result.task_id, task_result.to_dict())
+
+            context.add_wave_output(wave_number, wave_result.to_dict())
+
+            # Update state with completed tasks
+            state.setdefault("completed_tasks", []).extend(wave_result.completed_tasks)
+            state.setdefault("failed_tasks", []).extend(wave_result.failed_tasks)
+
+            # Check if we should abort
+            if wave_result.success_rate < 0.5:
+                logger.error(
+                    f"Wave {wave_number} had >50% failure rate, aborting execution"
+                )
+                break
+
+        return results
 
     async def _execute_with_semaphore(
         self,
         task: TaskSpec,
         state: dict[str, Any],
+        wave_number: int,
+        context: PromptContext,
+        parallel_task_ids: list[str],
     ) -> TaskExecutionResult:
         """Execute task with semaphore for concurrency control."""
         async with self._semaphore:
             try:
                 return await asyncio.wait_for(
-                    self._execute_task_internal(task, state),
+                    self._execute_task_internal(
+                        task, state, context, wave_number, parallel_task_ids
+                    ),
                     timeout=self.timeout,
                 )
             except asyncio.TimeoutError:
@@ -257,12 +444,16 @@ class ParallelExecutor:
                     task_id=task.id,
                     success=False,
                     error=f"Task timed out after {self.timeout} seconds",
+                    wave_number=wave_number,
                 )
 
     async def _execute_task_internal(
         self,
         task: TaskSpec,
         state: dict[str, Any],
+        context: PromptContext,
+        wave_number: int | None = None,
+        parallel_task_ids: list[str] | None = None,
     ) -> TaskExecutionResult:
         """
         Internal task execution logic.
@@ -273,14 +464,20 @@ class ParallelExecutor:
         logger.info(f"Executing task: {task.id} - {task.title}")
 
         try:
-            # Build execution context
-            context = self._build_task_context(task, state)
+            # Build prompt with context
+            prompt = self._build_task_prompt(
+                task, context, wave_number or 0, parallel_task_ids or []
+            )
 
-            # Get session router and execute
-            result = await self._execute_with_session(task, context, state)
+            # Execute with session manager
+            if self.use_terminal_manager:
+                result = await self._execute_with_manager(task, prompt, state)
+            else:
+                result = await self._execute_with_router(task, state)
 
             duration = (datetime.utcnow() - start_time).total_seconds()
             result.duration_seconds = duration
+            result.wave_number = wave_number
 
             return result
 
@@ -292,15 +489,74 @@ class ParallelExecutor:
                 success=False,
                 error=str(e),
                 duration_seconds=duration,
+                wave_number=wave_number,
             )
 
-    async def _execute_with_session(
+    def _build_task_prompt(
         self,
         task: TaskSpec,
-        context: dict[str, Any],
+        context: PromptContext,
+        wave_number: int,
+        parallel_task_ids: list[str],
+    ) -> str:
+        """Build prompt for task execution."""
+        return self._prompt_builder.build_parallel_task_prompt(
+            task=task,
+            context=context,
+            wave_number=wave_number,
+            parallel_tasks=parallel_task_ids,
+        )
+
+    async def _execute_with_manager(
+        self,
+        task: TaskSpec,
+        prompt: str,
         state: dict[str, Any],
     ) -> TaskExecutionResult:
-        """Execute task using a Claude session."""
+        """Execute task using TerminalSessionManager."""
+        manager = await self._get_session_manager()
+
+        if manager is None:
+            return await self._simulate_execution(task, {})
+
+        workspace = state.get("workspace_path", self.workspace)
+
+        try:
+            # Create session
+            session_id = await manager.create_session(
+                task_id=task.id,
+                prompt=prompt,
+                workspace=workspace,
+                context=state.get("global_context", {}),
+            )
+
+            self._active_sessions[task.id] = session_id
+
+            # Wait for completion
+            result = await manager.wait_for_completion(
+                session_id=session_id,
+                timeout=self.timeout,
+            )
+
+            # Convert to TaskExecutionResult
+            return TaskExecutionResult.from_session_result(task.id, result)
+
+        except Exception as e:
+            logger.error(f"Session execution failed for task {task.id}: {e}")
+            return TaskExecutionResult(
+                task_id=task.id,
+                success=False,
+                error=str(e),
+            )
+        finally:
+            self._active_sessions.pop(task.id, None)
+
+    async def _execute_with_router(
+        self,
+        task: TaskSpec,
+        state: dict[str, Any],
+    ) -> TaskExecutionResult:
+        """Execute task using SessionRouter (legacy)."""
         try:
             from src.sessions.router import SessionRouter
 
@@ -341,7 +597,7 @@ class ParallelExecutor:
         except ImportError:
             # SessionRouter not available, simulate execution
             logger.warning("SessionRouter not available, simulating execution")
-            return await self._simulate_execution(task, context)
+            return await self._simulate_execution(task, {})
 
     async def _simulate_execution(
         self,
@@ -365,37 +621,6 @@ class ParallelExecutor:
             files_created=task.files_to_create,
             files_modified=task.files_to_modify,
         )
-
-    def _build_task_context(
-        self,
-        task: TaskSpec,
-        state: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Build execution context for a task."""
-        context: dict[str, Any] = {
-            "task": task.model_dump(),
-            "workspace_path": state.get("workspace_path"),
-            "project_name": state.get("project_name"),
-        }
-
-        # Add global context
-        if state.get("global_context"):
-            context["global"] = state["global_context"]
-
-        # Add task-specific context
-        task_contexts = state.get("task_contexts", {})
-        if task.id in task_contexts:
-            context["task_context"] = task_contexts[task.id]
-
-        # Add context from dependency outputs
-        for dep_id in task.requires_context_from:
-            task_results = state.get("task_results", [])
-            for result in task_results:
-                if result.get("task_id") == dep_id:
-                    context.setdefault("dependency_outputs", {})[dep_id] = result
-                    break
-
-        return context
 
     def _get_tasks_by_ids(
         self,
@@ -423,6 +648,10 @@ class ParallelExecutor:
     async def cancel_all(self) -> None:
         """Cancel all active sessions."""
         logger.info("Cancelling all active sessions")
+
+        if self._session_manager:
+            await self._session_manager.kill_all()
+
         self._active_sessions.clear()
 
 
@@ -438,32 +667,48 @@ class SequentialExecutor:
     Useful for debugging or when parallel execution is not desired.
     """
 
-    def __init__(self, timeout: int = 600):
+    def __init__(self, timeout: int = 600, workspace: str = "."):
         """
         Initialize sequential executor.
 
         Args:
             timeout: Timeout per task in seconds.
+            workspace: Default workspace directory.
         """
         self.timeout = timeout
-        self._parallel = ParallelExecutor(max_concurrent=1, timeout=timeout)
+        self._parallel = ParallelExecutor(
+            max_concurrent=1,
+            timeout=timeout,
+            workspace=workspace,
+        )
 
     async def execute_wave(
         self,
         task_ids: list[str],
         state: dict[str, Any],
         wave_number: int = 0,
+        context: PromptContext | None = None,
     ) -> WaveExecutionResult:
         """Execute tasks sequentially."""
-        return await self._parallel.execute_wave(task_ids, state, wave_number)
+        return await self._parallel.execute_wave(task_ids, state, wave_number, context)
 
     async def execute_task(
         self,
         task: TaskSpec | dict[str, Any],
         state: dict[str, Any],
+        context: PromptContext | None = None,
     ) -> TaskExecutionResult:
         """Execute a single task."""
-        return await self._parallel.execute_task(task, state)
+        return await self._parallel.execute_task(task, state, context)
+
+    async def execute_graph(
+        self,
+        graph: DependencyGraph,
+        state: dict[str, Any],
+        context: PromptContext | None = None,
+    ) -> list[WaveExecutionResult]:
+        """Execute all tasks in a dependency graph."""
+        return await self._parallel.execute_graph(graph, state, context)
 
 
 # =============================================================================
@@ -502,9 +747,10 @@ class RetryExecutor:
         task_ids: list[str],
         state: dict[str, Any],
         wave_number: int = 0,
+        context: PromptContext | None = None,
     ) -> WaveExecutionResult:
         """Execute wave with retries for failed tasks."""
-        result = await self.executor.execute_wave(task_ids, state, wave_number)
+        result = await self.executor.execute_wave(task_ids, state, wave_number, context)
 
         # Retry failed tasks
         failed_ids = result.failed_tasks
@@ -517,7 +763,7 @@ class RetryExecutor:
             await asyncio.sleep(self.retry_delay)
 
             retry_result = await self.executor.execute_wave(
-                failed_ids, state, wave_number
+                failed_ids, state, wave_number, context
             )
 
             # Update results with retry outcomes
@@ -539,9 +785,10 @@ class RetryExecutor:
         self,
         task: TaskSpec | dict[str, Any],
         state: dict[str, Any],
+        context: PromptContext | None = None,
     ) -> TaskExecutionResult:
         """Execute single task with retries."""
-        result = await self.executor.execute_task(task, state)
+        result = await self.executor.execute_task(task, state, context)
 
         retry_count = 0
         while not result.success and retry_count < self.max_retries:
@@ -549,9 +796,167 @@ class RetryExecutor:
             logger.info(f"Retrying task (attempt {retry_count})")
 
             await asyncio.sleep(self.retry_delay)
-            result = await self.executor.execute_task(task, state)
+            result = await self.executor.execute_task(task, state, context)
 
         return result
+
+    async def execute_graph(
+        self,
+        graph: DependencyGraph,
+        state: dict[str, Any],
+        context: PromptContext | None = None,
+    ) -> list[WaveExecutionResult]:
+        """Execute graph with retries per wave."""
+        results = []
+
+        for wave_number in range(graph.total_waves):
+            wave_result = await self.execute_wave(
+                task_ids=graph.waves[wave_number],
+                state=state,
+                wave_number=wave_number,
+                context=context,
+            )
+            results.append(wave_result)
+
+            # Update state
+            state.setdefault("completed_tasks", []).extend(wave_result.completed_tasks)
+            state.setdefault("failed_tasks", []).extend(wave_result.failed_tasks)
+
+        return results
+
+
+# =============================================================================
+# DRY RUN EXECUTOR
+# =============================================================================
+
+
+class DryRunExecutor:
+    """
+    Executor that simulates execution without actually running tasks.
+
+    Useful for testing task decomposition and dependency resolution
+    without executing Claude sessions.
+    """
+
+    def __init__(
+        self,
+        delay_per_task: float = 0.1,
+        success_rate: float = 1.0,
+    ):
+        """
+        Initialize dry run executor.
+
+        Args:
+            delay_per_task: Simulated delay per task in seconds.
+            success_rate: Probability of task success (0.0 to 1.0).
+        """
+        self.delay_per_task = delay_per_task
+        self.success_rate = success_rate
+
+    async def execute_wave(
+        self,
+        task_ids: list[str],
+        state: dict[str, Any],
+        wave_number: int = 0,
+        context: PromptContext | None = None,
+    ) -> WaveExecutionResult:
+        """Simulate wave execution."""
+        import random
+
+        tasks = []
+        for task_dict in state.get("tasks", []):
+            if task_dict.get("id") in task_ids:
+                tasks.append(task_dict)
+
+        results = []
+        for task in tasks:
+            await asyncio.sleep(self.delay_per_task)
+
+            success = random.random() < self.success_rate
+
+            results.append(TaskExecutionResult(
+                task_id=task.get("id", "unknown"),
+                success=success,
+                output=f"Dry run output for {task.get('title', 'unknown')}" if success else None,
+                error="Simulated failure" if not success else None,
+                files_created=task.get("files_to_create", []),
+                files_modified=task.get("files_to_modify", []),
+                wave_number=wave_number,
+            ))
+
+        return WaveExecutionResult(
+            wave_number=wave_number,
+            results=results,
+        )
+
+    async def execute_task(
+        self,
+        task: TaskSpec | dict[str, Any],
+        state: dict[str, Any],
+        context: PromptContext | None = None,
+    ) -> TaskExecutionResult:
+        """Simulate single task execution."""
+        import random
+
+        if isinstance(task, dict):
+            task = TaskSpec(**task)
+
+        await asyncio.sleep(self.delay_per_task)
+        success = random.random() < self.success_rate
+
+        return TaskExecutionResult(
+            task_id=task.id,
+            success=success,
+            output=f"Dry run output for {task.title}" if success else None,
+            error="Simulated failure" if not success else None,
+            files_created=task.files_to_create,
+            files_modified=task.files_to_modify,
+        )
+
+    async def execute_graph(
+        self,
+        graph: DependencyGraph,
+        state: dict[str, Any],
+        context: PromptContext | None = None,
+    ) -> list[WaveExecutionResult]:
+        """Simulate graph execution."""
+        results = []
+
+        # Ensure state has completed_tasks and failed_tasks lists
+        if "completed_tasks" not in state:
+            state["completed_tasks"] = []
+        if "failed_tasks" not in state:
+            state["failed_tasks"] = []
+
+        for wave_number in range(graph.total_waves):
+            wave_result = await self.execute_wave(
+                task_ids=graph.waves[wave_number],
+                state=state,
+                wave_number=wave_number,
+                context=context,
+            )
+            results.append(wave_result)
+
+            # Update state with completed/failed tasks
+            state["completed_tasks"].extend(wave_result.completed_tasks)
+            state["failed_tasks"].extend(wave_result.failed_tasks)
+
+            # Update context if provided
+            if context is not None:
+                for result in wave_result.results:
+                    if result.success:
+                        context.completed_task_outputs[result.task_id] = {
+                            "output": result.output,
+                            "files_created": result.files_created,
+                            "files_modified": result.files_modified,
+                            "wave_number": wave_number,
+                        }
+
+            # Stop if too many failures
+            if wave_result.success_rate < 0.5:
+                break
+
+        return results
 
 
 # =============================================================================
@@ -564,15 +969,19 @@ def create_executor(
     max_concurrent: int = 5,
     timeout: int = 600,
     max_retries: int = 0,
-) -> ParallelExecutor | SequentialExecutor | RetryExecutor:
+    workspace: str = ".",
+    use_terminal_manager: bool = True,
+) -> ParallelExecutor | SequentialExecutor | RetryExecutor | DryRunExecutor:
     """
     Create an executor with the specified configuration.
 
     Args:
-        mode: Execution mode ("parallel", "sequential", "retry").
+        mode: Execution mode ("parallel", "sequential", "retry", "dry_run").
         max_concurrent: Maximum concurrent tasks for parallel mode.
         timeout: Timeout per task in seconds.
         max_retries: Maximum retries (only for retry mode).
+        workspace: Default workspace directory.
+        use_terminal_manager: Whether to use TerminalSessionManager.
 
     Returns:
         Configured executor instance.
@@ -582,9 +991,21 @@ def create_executor(
         >>> results = await executor.execute_wave(tasks, state)
     """
     if mode == "sequential":
-        return SequentialExecutor(timeout=timeout)
+        return SequentialExecutor(timeout=timeout, workspace=workspace)
     elif mode == "retry":
-        base_executor = ParallelExecutor(max_concurrent=max_concurrent, timeout=timeout)
+        base_executor = ParallelExecutor(
+            max_concurrent=max_concurrent,
+            timeout=timeout,
+            workspace=workspace,
+            use_terminal_manager=use_terminal_manager,
+        )
         return RetryExecutor(executor=base_executor, max_retries=max_retries)
+    elif mode == "dry_run":
+        return DryRunExecutor()
     else:
-        return ParallelExecutor(max_concurrent=max_concurrent, timeout=timeout)
+        return ParallelExecutor(
+            max_concurrent=max_concurrent,
+            timeout=timeout,
+            workspace=workspace,
+            use_terminal_manager=use_terminal_manager,
+        )

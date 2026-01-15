@@ -13,6 +13,13 @@ from uuid import uuid4
 from loguru import logger
 
 from src.core.config import Settings, get_settings
+from src.decomposition.executor import (
+    ParallelExecutor,
+    create_executor,
+    TaskExecutionResult,
+    WaveExecutionResult,
+)
+from src.prompts.builder import PromptContext, create_prompt_context
 
 
 # =============================================================================
@@ -362,6 +369,194 @@ class Kappa:
             project_name=state.get("project_name", ""),
             workspace_path=state.get("workspace_path", ""),
             state=final_state,
+        )
+
+    # =========================================================================
+    # PARALLEL EXECUTION (NEW)
+    # =========================================================================
+
+    async def execute_parallel(
+        self,
+        requirements: str,
+        project_name: str | None = None,
+        max_concurrent: int | None = None,
+        timeout: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Execute a project using direct parallel execution.
+
+        This method bypasses LangGraph and executes tasks directly using
+        the ParallelExecutor for maximum performance.
+
+        Args:
+            requirements: Natural language project requirements.
+            project_name: Optional project name.
+            max_concurrent: Maximum concurrent sessions (default from settings).
+            timeout: Timeout per task in seconds (default from settings).
+            dry_run: If True, simulate execution without running Claude.
+
+        Returns:
+            Execution result dict.
+
+        Example:
+            >>> kappa = Kappa()
+            >>> result = await kappa.execute_parallel(
+            ...     "Build Express API with GET /users and POST /users",
+            ...     max_concurrent=10
+            ... )
+        """
+        from src.decomposition.parser import RequirementsParser
+        from src.decomposition.task_generator import TaskGenerator
+        from src.decomposition.dependency_resolver import DependencyResolver
+        from src.knowledge.context_manager import SharedContext
+
+        project_id = str(uuid4())
+        project_name = project_name or f"project-{project_id[:8]}"
+        workspace_path = self.workspace / project_name
+        workspace_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Starting parallel execution for project: {project_name}")
+        logger.info(f"Workspace: {workspace_path}")
+
+        # Parse requirements
+        parser = RequirementsParser()
+        parsed_requirements = await parser.parse(requirements)
+
+        # Generate tasks
+        generator = TaskGenerator()
+        tasks = await generator.generate(parsed_requirements)
+
+        # Build dependency graph
+        resolver = DependencyResolver(tasks)
+        graph = resolver.resolve()
+
+        logger.info(f"Generated {len(tasks)} tasks in {graph.total_waves} waves")
+
+        # Create executor
+        max_concurrent = max_concurrent or self.settings.kappa_max_parallel_sessions
+        timeout = timeout or self.settings.kappa_session_timeout
+
+        if dry_run:
+            executor = create_executor("dry_run")
+        else:
+            executor = create_executor(
+                "parallel",
+                max_concurrent=max_concurrent,
+                timeout=timeout,
+                workspace=str(workspace_path),
+            )
+
+        # Create shared context
+        context = create_prompt_context(
+            project_name=project_name,
+            workspace=str(workspace_path),
+            requirements=parsed_requirements,
+        )
+
+        # Build state for executor
+        state = {
+            "project_id": project_id,
+            "project_name": project_name,
+            "workspace_path": str(workspace_path),
+            "tasks": [t.model_dump() for t in tasks],
+            "dependency_graph": {
+                "waves": graph.waves,
+                "total_waves": graph.total_waves,
+            },
+            "global_context": {
+                "tech_stack": parsed_requirements.tech_stack,
+                "project_type": parsed_requirements.project_type.value,
+            },
+            "completed_tasks": [],
+            "failed_tasks": [],
+        }
+
+        # Execute graph
+        started_at = datetime.utcnow()
+        wave_results = await executor.execute_graph(graph, state, context)
+
+        completed_at = datetime.utcnow()
+        duration = (completed_at - started_at).total_seconds()
+
+        # Aggregate results
+        total_completed = sum(len(w.completed_tasks) for w in wave_results)
+        total_failed = sum(len(w.failed_tasks) for w in wave_results)
+        all_files_created = []
+        all_files_modified = []
+
+        for wave in wave_results:
+            all_files_created.extend(wave.all_files_created)
+            all_files_modified.extend(wave.all_files_modified)
+
+        success = total_failed == 0 or total_completed > total_failed
+
+        logger.info(
+            f"Parallel execution complete: {total_completed} tasks succeeded, "
+            f"{total_failed} failed in {duration:.1f}s"
+        )
+
+        return {
+            "project_id": project_id,
+            "project_name": project_name,
+            "workspace_path": str(workspace_path),
+            "status": "completed" if success else "failed",
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_seconds": duration,
+            "total_tasks": len(tasks),
+            "completed_tasks": total_completed,
+            "failed_tasks": total_failed,
+            "waves_executed": len(wave_results),
+            "files_created": list(set(all_files_created)),
+            "files_modified": list(set(all_files_modified)),
+            "wave_results": [w.to_dict() for w in wave_results],
+        }
+
+    async def execute_wave_parallel(
+        self,
+        tasks: list[dict[str, Any]],
+        state: dict[str, Any],
+        wave_number: int = 0,
+        max_concurrent: int | None = None,
+    ) -> WaveExecutionResult:
+        """
+        Execute a single wave of tasks in parallel.
+
+        Args:
+            tasks: List of task dictionaries to execute.
+            state: Current execution state.
+            wave_number: Wave number for tracking.
+            max_concurrent: Maximum concurrent sessions.
+
+        Returns:
+            WaveExecutionResult with all task results.
+
+        Example:
+            >>> result = await kappa.execute_wave_parallel(
+            ...     tasks=[{"id": "task-1", ...}, {"id": "task-2", ...}],
+            ...     state=current_state,
+            ...     wave_number=0
+            ... )
+        """
+        max_concurrent = max_concurrent or self.settings.kappa_max_parallel_sessions
+
+        executor = create_executor(
+            "parallel",
+            max_concurrent=max_concurrent,
+            timeout=self.settings.kappa_session_timeout,
+            workspace=str(self.workspace),
+        )
+
+        task_ids = [t.get("id", str(uuid4())) for t in tasks]
+
+        # Ensure tasks are in state
+        state.setdefault("tasks", []).extend(tasks)
+
+        return await executor.execute_wave(
+            task_ids=task_ids,
+            state=state,
+            wave_number=wave_number,
         )
 
     # =========================================================================
