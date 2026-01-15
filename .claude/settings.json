@@ -1,0 +1,33 @@
+{
+  "skills": {
+    "enabled": true,
+    "hotReload": true
+  },
+  "hooks": {
+    "preToolUse": [],
+    "postToolUse": [],
+    "stop": []
+  },
+  "permissions": {
+    "allowedTools": [
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "Glob",
+      "Grep"
+    ],
+    "blockedPaths": [
+      ".env",
+      ".env.local",
+      "secrets/",
+      "*.pem",
+      "*.key"
+    ]
+  },
+  "defaults": {
+    "model": "claude-sonnet-4-20250514",
+    "maxTurns": 50,
+    "timeout": 300000
+  }
+}

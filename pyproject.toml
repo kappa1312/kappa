@@ -1,0 +1,138 @@
+[tool.poetry]
+name = "kappa-os"
+version = "0.1.0"
+description = "Autonomous Development Operating System - 10x faster software development through parallel Claude Code orchestration"
+authors = ["Kappa Team <kappa@example.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Core AI/Agent Framework
+claude-agent-sdk = "^0.1.19"
+langgraph = "^1.0.0"
+
+# Database
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.45"}
+asyncpg = "^0.31.0"
+alembic = "^1.14.0"
+
+# Data Validation & Settings
+pydantic = "^2.12.0"
+pydantic-settings = "^2.7.0"
+
+# CLI & Terminal
+typer = "^0.21.0"
+rich = "^13.9.0"
+
+# Utilities
+loguru = "^0.7.3"
+python-dotenv = "^1.0.1"
+anyio = "^4.8.0"
+httpx = "^0.28.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.4"
+pytest-asyncio = "^0.25.0"
+pytest-cov = "^6.0.0"
+mypy = "^1.14.0"
+black = "^24.10.0"
+ruff = "^0.9.0"
+ipython = "^8.31.0"
+pre-commit = "^4.0.0"
+
+[tool.poetry.scripts]
+kappa = "src.cli.main:app"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py311', 'py312', 'py313']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "B008",   # do not perform function calls in argument defaults
+    "B904",   # raise without from inside except
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+show_error_codes = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "langgraph.*",
+    "claude_agent_sdk.*",
+    "loguru.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --cov=src --cov-report=term-missing --cov-report=html"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
