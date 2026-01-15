@@ -1,8 +1,9 @@
 """End-to-end tests for complete Kappa workflow."""
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.core.orchestrator import Kappa
 from src.core.state import ProjectStatus
@@ -71,7 +72,8 @@ class TestFullWorkflow:
 
         # Should have setup task (check both 'name' and 'title' for compatibility)
         setup_tasks = [
-            t for t in tasks
+            t
+            for t in tasks
             if "setup" in t.get("name", t.get("title", "")).lower()
             or "initialize" in t.get("name", t.get("title", "")).lower()
             or "foundation" in t.get("name", t.get("title", "")).lower()
@@ -80,7 +82,8 @@ class TestFullWorkflow:
 
         # Should have model tasks (check both old and new category formats)
         model_tasks = [
-            t for t in tasks
+            t
+            for t in tasks
             if t.get("category") in ("data_model", "business_logic")
             or "model" in t.get("name", t.get("title", "")).lower()
         ]
@@ -92,8 +95,8 @@ class TestFullWorkflow:
         mock_settings: None,
     ) -> None:
         """Test that tasks are organized into waves correctly."""
-        from src.decomposition.task_generator import TaskGenerator
         from src.decomposition.dependency_resolver import DependencyResolver
+        from src.decomposition.task_generator import TaskGenerator
 
         generator = TaskGenerator()
         resolver = DependencyResolver()
@@ -155,6 +158,7 @@ class TestCLIWorkflow:
     def test_cli_health_command(self) -> None:
         """Test CLI health command."""
         from typer.testing import CliRunner
+
         from src.cli.main import app
 
         runner = CliRunner()
@@ -166,6 +170,7 @@ class TestCLIWorkflow:
     def test_cli_init_command(self, tmp_path: Path) -> None:
         """Test CLI init command."""
         from typer.testing import CliRunner
+
         from src.cli.main import app
 
         runner = CliRunner()
@@ -180,6 +185,7 @@ class TestCLIWorkflow:
     def test_cli_decompose_command(self) -> None:
         """Test CLI decompose command."""
         from typer.testing import CliRunner
+
         from src.cli.main import app
 
         runner = CliRunner()

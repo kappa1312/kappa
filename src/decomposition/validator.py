@@ -6,13 +6,11 @@ generated projects are correct, buildable, and pass tests.
 
 import asyncio
 import json
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
-
 
 # =============================================================================
 # VALIDATION RESULTS
@@ -279,7 +277,7 @@ class ProjectValidator:
         for py_file in self.workspace.rglob("*.py"):
             checked_files += 1
             try:
-                with open(py_file, "r") as f:
+                with open(py_file) as f:
                     content = f.read()
                 compile(content, str(py_file), "exec")
             except SyntaxError as e:
@@ -289,7 +287,7 @@ class ProjectValidator:
         for json_file in self.workspace.rglob("*.json"):
             checked_files += 1
             try:
-                with open(json_file, "r") as f:
+                with open(json_file) as f:
                     json.load(f)
             except json.JSONDecodeError as e:
                 issues.append(f"{json_file.name}: {e}")
@@ -375,8 +373,9 @@ class ProjectValidator:
             )
         else:
             # Check for test files
-            test_files = list(self.workspace.rglob("test_*.py")) + \
-                        list(self.workspace.rglob("*_test.py"))
+            test_files = list(self.workspace.rglob("test_*.py")) + list(
+                self.workspace.rglob("*_test.py")
+            )
             if test_files:
                 return await self._run_command(
                     "tests",
@@ -452,7 +451,7 @@ class ProjectValidator:
                     process.communicate(),
                     timeout=self.timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 return ValidationResult(
                     check_name=check_name,
@@ -579,7 +578,7 @@ class FileValidator:
             )
 
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 content = f.read()
             compile(content, str(file_path), "exec")
             return ValidationResult(
@@ -607,7 +606,7 @@ class FileValidator:
             )
 
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 json.load(f)
             return ValidationResult(
                 check_name="json_syntax",
@@ -635,7 +634,8 @@ class FileValidator:
 
         try:
             import yaml
-            with open(file_path, "r") as f:
+
+            with open(file_path) as f:
                 yaml.safe_load(f)
             return ValidationResult(
                 check_name="yaml_syntax",

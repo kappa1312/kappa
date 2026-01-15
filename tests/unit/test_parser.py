@@ -1,8 +1,9 @@
 """Unit tests for RequirementsParser."""
 
 import pytest
+
+from src.decomposition.models import ProjectRequirements, ProjectType
 from src.decomposition.parser import RequirementsParser
-from src.decomposition.models import ProjectType, ProjectRequirements
 
 
 @pytest.fixture
@@ -30,8 +31,7 @@ class TestRequirementsParser:
     async def test_parse_website(self, parser):
         """Test parsing a website requirement."""
         requirements = (
-            "Create a portfolio website with Next.js, "
-            "including home, about, and contact pages"
+            "Create a portfolio website with Next.js, " "including home, about, and contact pages"
         )
 
         result = await parser.parse(requirements)
@@ -73,8 +73,7 @@ class TestRequirementsParser:
     async def test_extract_tech_stack(self, parser):
         """Test tech stack extraction."""
         requirements = (
-            "Build an API using Express.js with PostgreSQL database "
-            "and Redis for caching"
+            "Build an API using Express.js with PostgreSQL database " "and Redis for caching"
         )
 
         result = await parser.parse(requirements)
@@ -84,10 +83,10 @@ class TestRequirementsParser:
         # Check if common technologies are detected
         tech_values = " ".join(result.tech_stack.values()).lower()
         has_tech = (
-            "express" in tech_values or
-            "postgres" in tech_values or
-            "node" in tech_values or
-            len(result.tech_stack) > 0
+            "express" in tech_values
+            or "postgres" in tech_values
+            or "node" in tech_values
+            or len(result.tech_stack) > 0
         )
         assert has_tech
 
@@ -215,9 +214,7 @@ class TestTechStackExtraction:
     async def test_extract_multiple_technologies(self):
         """Test extraction of multiple technologies."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build an app with Next.js, PostgreSQL, and Redis caching"
-        )
+        result = await parser.parse("Build an app with Next.js, PostgreSQL, and Redis caching")
 
         # Should have parsed successfully
         assert isinstance(result, ProjectRequirements)
@@ -240,9 +237,7 @@ class TestFeatureExtraction:
     async def test_extract_multiple_features(self):
         """Test extraction of multiple features."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build an app with login, search, and notifications"
-        )
+        result = await parser.parse("Build an app with login, search, and notifications")
 
         assert len(result.features) >= 0  # Parser may extract or not
 
@@ -254,9 +249,7 @@ class TestPageExtraction:
     async def test_extract_named_pages(self):
         """Test extraction of named pages."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Create a website with home, about, and contact pages"
-        )
+        result = await parser.parse("Create a website with home, about, and contact pages")
 
         # Should extract some pages or at least parse
         assert isinstance(result.pages, list)
@@ -265,9 +258,7 @@ class TestPageExtraction:
     async def test_extract_dashboard_pages(self):
         """Test extraction of dashboard pages."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build a dashboard with overview, users, and settings pages"
-        )
+        result = await parser.parse("Build a dashboard with overview, users, and settings pages")
 
         assert isinstance(result.pages, list)
 
@@ -308,9 +299,7 @@ class TestConstraintExtraction:
     async def test_extract_performance_constraint(self):
         """Test performance constraint extraction."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build a high-performance API with response times under 100ms"
-        )
+        result = await parser.parse("Build a high-performance API with response times under 100ms")
 
         assert isinstance(result.constraints, list)
 
@@ -331,9 +320,7 @@ class TestEdgeCases:
     async def test_special_characters(self):
         """Test handling of special characters."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build an app with <special> & \"characters\" (test)"
-        )
+        result = await parser.parse('Build an app with <special> & "characters" (test)')
 
         assert isinstance(result, ProjectRequirements)
 
@@ -341,9 +328,7 @@ class TestEdgeCases:
     async def test_unicode_characters(self):
         """Test handling of unicode characters."""
         parser = RequirementsParser()
-        result = await parser.parse(
-            "Build an app with émojis 🚀 and ünicode characters"
-        )
+        result = await parser.parse("Build an app with émojis 🚀 and ünicode characters")
 
         assert isinstance(result, ProjectRequirements)
 

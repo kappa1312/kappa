@@ -5,17 +5,16 @@ Determines the optimal session type for each task and manages
 parallel Claude session execution with load balancing.
 """
 
-from typing import Any
 from enum import Enum
+from typing import Any
 
 import anyio
 from loguru import logger
 
 from src.core.state import KappaState, TaskResult
-from src.decomposition.models import TaskSpec, SessionType, ProjectType
-from src.sessions.base import SessionConfig, SessionStatus
+from src.decomposition.models import SessionType, TaskSpec
+from src.sessions.base import SessionConfig
 from src.sessions.terminal import TerminalSession, TerminalSessionManager
-
 
 # =============================================================================
 # ROUTING STRATEGY
@@ -24,9 +23,10 @@ from src.sessions.terminal import TerminalSession, TerminalSessionManager
 
 class RoutingStrategy(str, Enum):
     """Routing strategies for session selection."""
-    AUTO = "auto"                    # Automatically determine best session type
+
+    AUTO = "auto"  # Automatically determine best session type
     TERMINAL_ONLY = "terminal_only"  # Force all tasks to terminal
-    ROUND_ROBIN = "round_robin"      # Distribute across session types
+    ROUND_ROBIN = "round_robin"  # Distribute across session types
     LOAD_BALANCED = "load_balanced"  # Route based on current load
     PRIORITY_BASED = "priority_based"  # Route high priority to faster sessions
 
@@ -64,7 +64,7 @@ class TaskRouter:
             SessionType.TERMINAL: 0,
             SessionType.WEB: 0,
             SessionType.NATIVE: 0,
-            SessionType.EXTENSION: 0
+            SessionType.EXTENSION: 0,
         }
         self._routing_stats: dict[str, int] = {}
 
@@ -112,9 +112,18 @@ class TaskRouter:
 
         # Check for browser/web automation needs
         web_keywords = [
-            'screenshot', 'browser', 'selenium', 'playwright',
-            'e2e test', 'end-to-end', 'visual test', 'cypress',
-            'puppeteer', 'web scraping', 'crawl', 'browser automation'
+            "screenshot",
+            "browser",
+            "selenium",
+            "playwright",
+            "e2e test",
+            "end-to-end",
+            "visual test",
+            "cypress",
+            "puppeteer",
+            "web scraping",
+            "crawl",
+            "browser automation",
         ]
         if any(kw in combined for kw in web_keywords):
             logger.debug(f"Task {task.id} routed to WEB (keyword match)")
@@ -122,9 +131,17 @@ class TaskRouter:
 
         # Check for native app automation needs
         native_keywords = [
-            'xcode', 'android studio', 'figma', 'sketch',
-            'photoshop', 'illustrator', 'desktop app',
-            'native app', 'electron', 'tauri', 'gui automation'
+            "xcode",
+            "android studio",
+            "figma",
+            "sketch",
+            "photoshop",
+            "illustrator",
+            "desktop app",
+            "native app",
+            "electron",
+            "tauri",
+            "gui automation",
         ]
         if any(kw in combined for kw in native_keywords):
             logger.debug(f"Task {task.id} routed to NATIVE (keyword match)")
@@ -132,9 +149,13 @@ class TaskRouter:
 
         # Check for Chrome extension needs
         extension_keywords = [
-            'chrome extension', 'browser extension',
-            'manifest.json', 'content script', 'background script',
-            'firefox addon', 'safari extension'
+            "chrome extension",
+            "browser extension",
+            "manifest.json",
+            "content script",
+            "background script",
+            "firefox addon",
+            "safari extension",
         ]
         if any(kw in combined for kw in extension_keywords):
             logger.debug(f"Task {task.id} routed to EXTENSION (keyword match)")
@@ -165,16 +186,16 @@ class TaskRouter:
     def route_batch(self, tasks: list[TaskSpec | dict[str, Any]]) -> dict[str, SessionType]:
         """Route multiple tasks at once."""
         return {
-            (t.id if isinstance(t, TaskSpec) else t.get('id', 'unknown')): self.route(t)
+            (t.id if isinstance(t, TaskSpec) else t.get("id", "unknown")): self.route(t)
             for t in tasks
         }
 
     def get_routing_stats(self) -> dict[str, Any]:
         """Get statistics on routing decisions."""
         return {
-            'session_counts': {k.value: v for k, v in self._session_counts.items()},
-            'total_routed': sum(self._session_counts.values()),
-            'strategy': self.strategy.value
+            "session_counts": {k.value: v for k, v in self._session_counts.items()},
+            "total_routed": sum(self._session_counts.values()),
+            "strategy": self.strategy.value,
         }
 
     def reset_stats(self) -> None:
@@ -208,7 +229,7 @@ class SessionRouter:
         max_sessions: int = 5,
         timeout: int = 3600,
         session_config: SessionConfig | None = None,
-        use_manager: bool = True
+        use_manager: bool = True,
     ) -> None:
         """
         Initialize the session router.
@@ -232,8 +253,7 @@ class SessionRouter:
         # Initialize session manager if using new approach
         if use_manager:
             self._manager = TerminalSessionManager(
-                max_concurrent=max_sessions,
-                default_config=self.session_config
+                max_concurrent=max_sessions, default_config=self.session_config
             )
         else:
             self._manager = None
@@ -270,10 +290,7 @@ class SessionRouter:
         return results
 
     async def execute_tasks_with_manager(
-        self,
-        tasks: list[TaskSpec | dict[str, Any]],
-        state: dict[str, Any],
-        workspace: str
+        self, tasks: list[TaskSpec | dict[str, Any]], state: dict[str, Any], workspace: str
     ) -> list[dict[str, Any]]:
         """
         Execute tasks using the TerminalSessionManager.
@@ -288,8 +305,7 @@ class SessionRouter:
         """
         if not self._manager:
             self._manager = TerminalSessionManager(
-                max_concurrent=self.max_sessions,
-                default_config=self.session_config
+                max_concurrent=self.max_sessions, default_config=self.session_config
             )
 
         results = []
@@ -309,34 +325,35 @@ class SessionRouter:
                 task_id=task_spec.id,
                 prompt=prompt,
                 workspace=workspace,
-                context=state.get('global_context', {}),
-                config=self.session_config
+                context=state.get("global_context", {}),
+                config=self.session_config,
             )
 
             # Wait for completion
             result = await self._manager.wait_for_completion(
-                session_id=session_id,
-                timeout=self.timeout
+                session_id=session_id, timeout=self.timeout
             )
 
             return {
-                'task_id': task_spec.id,
-                'session_id': session_id,
-                'success': result.is_success(),
-                'output': result.stdout,
-                'error': result.error_message,
-                'files_created': result.files_created,
-                'files_modified': result.files_modified,
-                'duration_seconds': result.duration_seconds,
-                'return_code': result.return_code
+                "task_id": task_spec.id,
+                "session_id": session_id,
+                "success": result.is_success(),
+                "output": result.stdout,
+                "error": result.error_message,
+                "files_created": result.files_created,
+                "files_modified": result.files_modified,
+                "duration_seconds": result.duration_seconds,
+                "return_code": result.return_code,
             }
 
         # Execute all tasks in parallel
         async with anyio.create_task_group() as tg:
             for task in tasks:
+
                 async def wrapper(t: TaskSpec | dict[str, Any] = task) -> None:
                     result = await execute_one(t)
                     results.append(result)
+
                 tg.start_soon(wrapper)
 
         return results
@@ -376,8 +393,7 @@ class SessionRouter:
             result = await session.execute(prompt)
 
             logger.info(
-                f"Task {task_name} completed: "
-                f"{'success' if result.success else 'failed'}"
+                f"Task {task_name} completed: " f"{'success' if result.success else 'failed'}"
             )
 
             return result
@@ -434,39 +450,41 @@ Focus on completing your specific task efficiently and correctly."""
         # Add target files if specified
         file_targets = task.get("file_targets", task.get("files_to_create", []))
         if file_targets:
-            lines.extend([
-                "## Target Files",
-                *[f"- {f}" for f in file_targets],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Target Files",
+                    *[f"- {f}" for f in file_targets],
+                    "",
+                ]
+            )
 
         # Add dependencies context
         dependencies = task.get("dependencies", [])
         if dependencies:
-            lines.extend([
-                "## Dependencies",
-                f"This task depends on: {', '.join(dependencies)}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Dependencies",
+                    f"This task depends on: {', '.join(dependencies)}",
+                    "",
+                ]
+            )
 
         # Add execution instructions
-        lines.extend([
-            "## Instructions",
-            "1. Read any existing relevant files first",
-            "2. Implement the required functionality",
-            "3. Ensure code follows project conventions",
-            "4. Test your changes if possible",
-            "",
-            "Begin implementation now.",
-        ])
+        lines.extend(
+            [
+                "## Instructions",
+                "1. Read any existing relevant files first",
+                "2. Implement the required functionality",
+                "3. Ensure code follows project conventions",
+                "4. Test your changes if possible",
+                "",
+                "Begin implementation now.",
+            ]
+        )
 
         return "\n".join(lines)
 
-    def _build_task_prompt_enhanced(
-        self,
-        task: TaskSpec,
-        state: dict[str, Any]
-    ) -> str:
+    def _build_task_prompt_enhanced(self, task: TaskSpec, state: dict[str, Any]) -> str:
         """Build enhanced task prompt with more context."""
         lines = [
             f"# Task: {task.title}",
@@ -478,57 +496,69 @@ Focus on completing your specific task efficiently and correctly."""
 
         # Files to create
         if task.files_to_create:
-            lines.extend([
-                "## Files to Create",
-                *[f"- `{f}`" for f in task.files_to_create],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Files to Create",
+                    *[f"- `{f}`" for f in task.files_to_create],
+                    "",
+                ]
+            )
 
         # Files to modify
         if task.files_to_modify:
-            lines.extend([
-                "## Files to Modify",
-                *[f"- `{f}`" for f in task.files_to_modify],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Files to Modify",
+                    *[f"- `{f}`" for f in task.files_to_modify],
+                    "",
+                ]
+            )
 
         # Dependencies
         if task.dependencies:
-            lines.extend([
-                "## Dependencies",
-                f"This task depends on: {', '.join(task.dependencies)}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Dependencies",
+                    f"This task depends on: {', '.join(task.dependencies)}",
+                    "",
+                ]
+            )
 
         # Validation commands
         if task.validation_commands:
-            lines.extend([
-                "## Validation",
-                "After completing, run these commands to validate:",
-                *[f"- `{cmd}`" for cmd in task.validation_commands],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Validation",
+                    "After completing, run these commands to validate:",
+                    *[f"- `{cmd}`" for cmd in task.validation_commands],
+                    "",
+                ]
+            )
 
         # Add global context if available
-        global_context = state.get('global_context', {})
+        global_context = state.get("global_context", {})
         if global_context:
-            if 'tech_stack' in global_context:
-                lines.extend([
-                    "## Tech Stack",
-                    *[f"- {k}: {v}" for k, v in global_context['tech_stack'].items()],
-                    "",
-                ])
+            if "tech_stack" in global_context:
+                lines.extend(
+                    [
+                        "## Tech Stack",
+                        *[f"- {k}: {v}" for k, v in global_context["tech_stack"].items()],
+                        "",
+                    ]
+                )
 
-        lines.extend([
-            "## Instructions",
-            "1. Read any existing relevant files first",
-            "2. Implement the required functionality",
-            "3. Follow project code conventions",
-            "4. Include proper error handling",
-            "5. Add type hints to all functions",
-            "",
-            "Execute this task completely. Create production-quality code.",
-        ])
+        lines.extend(
+            [
+                "## Instructions",
+                "1. Read any existing relevant files first",
+                "2. Implement the required functionality",
+                "3. Follow project code conventions",
+                "4. Include proper error handling",
+                "5. Add type hints to all functions",
+                "",
+                "Execute this task completely. Create production-quality code.",
+            ]
+        )
 
         return "\n".join(lines)
 

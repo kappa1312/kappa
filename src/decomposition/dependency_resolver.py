@@ -17,7 +17,6 @@ from src.decomposition.models import (
     TaskSpec,
 )
 
-
 # Type variable for task types
 TaskType = TypeVar("TaskType", Task, TaskSpec)
 
@@ -272,7 +271,9 @@ class DependencyResolver:
 
             if not wave:
                 # Deadlock - remaining tasks have unsatisfiable dependencies
-                remaining = [self._get_task_id(t) for t in tasks if self._get_task_id(t) not in assigned]
+                remaining = [
+                    self._get_task_id(t) for t in tasks if self._get_task_id(t) not in assigned
+                ]
                 logger.error(f"Cannot assign remaining tasks: {remaining}")
                 break
 
@@ -389,9 +390,7 @@ class DependencyResolver:
 
             if len(valid_deps) != len(deps):
                 invalid = set(deps) - set(valid_deps)
-                logger.warning(
-                    f"Task {task_id} has invalid dependencies: {invalid}"
-                )
+                logger.warning(f"Task {task_id} has invalid dependencies: {invalid}")
 
             graph[task_id] = valid_deps
 

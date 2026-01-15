@@ -1,7 +1,6 @@
 """Main CLI entry point using Typer."""
 
 from pathlib import Path
-from typing import Optional
 
 import anyio
 import typer
@@ -31,7 +30,7 @@ def version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None,
         "--version",
         "-v",
@@ -58,7 +57,7 @@ def run(
         "-p",
         help="Path to project directory",
     ),
-    project_name: Optional[str] = typer.Option(
+    project_name: str | None = typer.Option(
         None,
         "--name",
         "-n",
@@ -106,7 +105,6 @@ def run(
 
         async def execute() -> None:
             from src.core.orchestrator import Kappa
-            from src.core.config import Settings
 
             # Override settings if needed
             kappa = Kappa()
@@ -134,7 +132,7 @@ def init(
         Path("."),
         help="Path to initialize project",
     ),
-    name: Optional[str] = typer.Option(
+    name: str | None = typer.Option(
         None,
         "--name",
         "-n",
@@ -165,7 +163,7 @@ def init(
 
 @app.command()
 def status(
-    project_id: Optional[str] = typer.Argument(
+    project_id: str | None = typer.Argument(
         None,
         help="Project ID to check status",
     ),
@@ -185,7 +183,7 @@ def status(
 @app.command()
 def decompose(
     spec: str = typer.Argument(..., help="Specification to decompose"),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -225,6 +223,7 @@ def decompose(
 
         if output:
             import json
+
             output.write_text(json.dumps(tasks, indent=2))
             console.print(f"[green]Saved to {output}[/green]")
 

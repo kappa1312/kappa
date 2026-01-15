@@ -6,16 +6,15 @@ parallel Claude sessions, enabling type definitions, imports, discoveries,
 and decisions to flow between tasks executing in different waves.
 """
 
-from typing import Any
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.knowledge.models import ContextSnapshot, Decision
-
 
 # =============================================================================
 # CONTEXT TYPES
@@ -129,12 +128,14 @@ class SharedContext:
         """Add a decision."""
         if category not in self.decisions:
             self.decisions[category] = []
-        self.decisions[category].append({
-            "decision": decision,
-            "rationale": rationale,
-            "made_by": made_by,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+        self.decisions[category].append(
+            {
+                "decision": decision,
+                "rationale": rationale,
+                "made_by": made_by,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
         logger.debug(f"[Context] Added decision ({category}): {decision[:50]}...")
 
     def record_task_output(
@@ -839,11 +840,13 @@ class ContextManager:
         decisions = []
         for category, decs in shared.decisions.items():
             for dec in decs:
-                decisions.append({
-                    "category": category,
-                    "decision": dec["decision"],
-                    "rationale": dec.get("rationale", ""),
-                })
+                decisions.append(
+                    {
+                        "category": category,
+                        "decision": dec["decision"],
+                        "rationale": dec.get("rationale", ""),
+                    }
+                )
 
         # Get outputs from previous waves
         previous_wave_outputs = {}

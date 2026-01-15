@@ -1,28 +1,24 @@
 """Integration tests for parallel execution."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.core.orchestrator import Kappa
 from src.decomposition.executor import (
-    ParallelExecutor,
     DryRunExecutor,
-    TaskExecutionResult,
-    WaveExecutionResult,
-    create_executor,
 )
 from src.decomposition.models import (
-    TaskSpec,
+    Complexity,
     DependencyGraph,
     ProjectRequirements,
     ProjectType,
     TaskCategory,
-    Complexity,
+    TaskSpec,
 )
-from src.prompts.builder import PromptBuilder, PromptContext, create_prompt_context
 from src.knowledge.context_manager import SharedContext
-
+from src.prompts.builder import PromptBuilder, PromptContext, create_prompt_context
 
 # =============================================================================
 # FIXTURES
@@ -107,9 +103,9 @@ def sample_graph(sample_tasks: list[TaskSpec]) -> DependencyGraph:
         graph.add_task(task)
 
     graph.waves = [
-        ["setup-1"],          # Wave 0: Setup
+        ["setup-1"],  # Wave 0: Setup
         ["model-1", "model-2"],  # Wave 1: Models (parallel)
-        ["api-1"],            # Wave 2: API
+        ["api-1"],  # Wave 2: API
     ]
     return graph
 
@@ -203,12 +199,15 @@ class TestSharedContextIntegration:
         context = SharedContext(project_id="test-123")
 
         # Wave 0 output
-        context.record_task_output("setup-1", {
-            "task_id": "setup-1",
-            "success": True,
-            "wave_number": 0,
-            "files_created": ["pyproject.toml"],
-        })
+        context.record_task_output(
+            "setup-1",
+            {
+                "task_id": "setup-1",
+                "success": True,
+                "wave_number": 0,
+                "files_created": ["pyproject.toml"],
+            },
+        )
 
         # Wave 1 output
         context.add_type("User", "class User: pass")
@@ -227,11 +226,14 @@ class TestSharedContextIntegration:
 
         # Add type from model task
         context.add_type("User", "class User: pass")
-        context.record_task_output("model-1", {
-            "task_id": "model-1",
-            "success": True,
-            "types_exported": ["User"],
-        })
+        context.record_task_output(
+            "model-1",
+            {
+                "task_id": "model-1",
+                "success": True,
+                "types_exported": ["User"],
+            },
+        )
 
         # Get types for API task (depends on model-1)
         types = context.get_types_for_task("api-1", ["model-1"])
@@ -444,9 +446,7 @@ class TestParallelExecutionE2E:
         kappa = Kappa(workspace=tmp_path)
 
         # First preview to see tasks
-        preview = await kappa.preview(
-            "Build a REST API with user endpoints"
-        )
+        preview = await kappa.preview("Build a REST API with user endpoints")
 
         assert len(preview["tasks"]) > 0
         assert "dependency_graph" in preview
@@ -473,7 +473,6 @@ class TestParallelExecutionPerformance:
     @pytest.mark.asyncio
     async def test_concurrent_execution_faster_than_sequential(self) -> None:
         """Test that parallel execution is faster than sequential."""
-        import asyncio
 
         # Create 10 tasks that each take 0.1s
         tasks = [
@@ -500,6 +499,7 @@ class TestParallelExecutionPerformance:
         parallel_executor = DryRunExecutor(delay_per_task=0.1, success_rate=1.0)
 
         import time
+
         start = time.time()
         await parallel_executor.execute_wave(
             task_ids=[t.id for t in tasks],

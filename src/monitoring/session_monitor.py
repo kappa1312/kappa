@@ -45,12 +45,16 @@ class SessionMonitor:
         """
         if session_id in self._sessions:
             session = self._sessions.pop(session_id)
-            self._history.append({
-                "session_id": session_id,
-                "status": session.status.value,
-                "started_at": session.started_at.isoformat(),
-                "completed_at": session.completed_at.isoformat() if session.completed_at else None,
-            })
+            self._history.append(
+                {
+                    "session_id": session_id,
+                    "status": session.status.value,
+                    "started_at": session.started_at.isoformat(),
+                    "completed_at": (
+                        session.completed_at.isoformat() if session.completed_at else None
+                    ),
+                }
+            )
             logger.debug(f"Unregistered session: {session_id}")
 
     def update_status(
@@ -94,7 +98,8 @@ class SessionMonitor:
             List of active SessionInfo objects.
         """
         return [
-            s for s in self._sessions.values()
+            s
+            for s in self._sessions.values()
             if s.status in (SessionStatus.STARTING, SessionStatus.RUNNING)
         ]
 

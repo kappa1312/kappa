@@ -1,7 +1,7 @@
 """Async PostgreSQL database connection management."""
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import (

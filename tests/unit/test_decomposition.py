@@ -4,7 +4,6 @@ import pytest
 
 from src.decomposition.dependency_resolver import DependencyResolver
 from src.decomposition.models import (
-    Complexity,
     DependencyGraph,
     FileConflict,
     ProjectRequirements,
@@ -171,7 +170,7 @@ class TestTaskGenerator:
 
         # Should have tasks in multiple waves
         # TaskSpec uses wave_number, legacy Task uses wave
-        waves = set(getattr(t, 'wave_number', getattr(t, 'wave', 0)) for t in tasks)
+        waves = set(getattr(t, "wave_number", getattr(t, "wave", 0)) for t in tasks)
         assert len(waves) > 1
 
 

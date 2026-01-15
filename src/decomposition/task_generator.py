@@ -140,6 +140,7 @@ class TaskGenerator:
         # Handle string input for backward compatibility
         if isinstance(requirements, str):
             from src.decomposition.parser import RequirementsParser
+
             parser = RequirementsParser()
             requirements = await parser.parse(requirements)
 
@@ -1291,11 +1292,7 @@ class TaskGenerator:
             "settings": ["settings", "config", "preference"],
         }
 
-        text = (
-            requirements.description.lower()
-            + " "
-            + " ".join(requirements.features).lower()
-        )
+        text = requirements.description.lower() + " " + " ".join(requirements.features).lower()
 
         for entity, keywords in common_entities.items():
             if any(kw in text for kw in keywords):

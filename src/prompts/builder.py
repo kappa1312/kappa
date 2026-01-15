@@ -7,26 +7,24 @@ project-aware prompts, and validation prompts.
 """
 
 from typing import Any
-from pathlib import Path
 
 from loguru import logger
 
-from src.prompts.templates import (
-    DECOMPOSITION_PROMPT,
-    SYSTEM_PROMPT,
-    TASK_PROMPT,
-    PARALLEL_TASK_PROMPT,
-    VALIDATION_PROMPT,
-    CONTEXT_INJECTION_PROMPT,
-    PromptTemplate,
-)
 from src.decomposition.models import (
-    TaskSpec,
     ProjectRequirements,
     ProjectType,
     TaskCategory,
+    TaskSpec,
 )
-
+from src.prompts.templates import (
+    CONTEXT_INJECTION_PROMPT,
+    DECOMPOSITION_PROMPT,
+    PARALLEL_TASK_PROMPT,
+    SYSTEM_PROMPT,
+    TASK_PROMPT,
+    VALIDATION_PROMPT,
+    PromptTemplate,
+)
 
 # =============================================================================
 # PROMPT CONTEXT
@@ -105,11 +103,13 @@ class PromptContext:
         rationale: str = "",
     ) -> None:
         """Add a project decision."""
-        self.decisions.append({
-            "category": category,
-            "decision": decision,
-            "rationale": rationale,
-        })
+        self.decisions.append(
+            {
+                "category": category,
+                "decision": decision,
+                "rationale": rationale,
+            }
+        )
 
     def add_discovery(self, discovery: str) -> None:
         """Add a project discovery."""
@@ -130,7 +130,11 @@ class PromptContext:
     def get_types_for_task(self, task: TaskSpec) -> dict[str, str]:
         """Get type definitions relevant for a task."""
         # Return all types if task needs models
-        if task.category in (TaskCategory.DATA_MODEL, TaskCategory.API, TaskCategory.BUSINESS_LOGIC):
+        if task.category in (
+            TaskCategory.DATA_MODEL,
+            TaskCategory.API,
+            TaskCategory.BUSINESS_LOGIC,
+        ):
             return self.type_definitions
         return {}
 
@@ -279,18 +283,22 @@ class PromptBuilder:
         ]
 
         if task.files_to_create:
-            lines.extend([
-                "",
-                "## Files to Create",
-                *[f"- `{f}`" for f in task.files_to_create],
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## Files to Create",
+                    *[f"- `{f}`" for f in task.files_to_create],
+                ]
+            )
 
         if task.files_to_modify:
-            lines.extend([
-                "",
-                "## Files to Modify",
-                *[f"- `{f}`" for f in task.files_to_modify],
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## Files to Modify",
+                    *[f"- `{f}`" for f in task.files_to_modify],
+                ]
+            )
 
         return "\n".join(lines)
 
@@ -368,7 +376,7 @@ class PromptBuilder:
         # Project decisions
         if context.decisions:
             lines.append("## Project Decisions")
-            for dec in context.decisions[:self._max_decisions]:
+            for dec in context.decisions[: self._max_decisions]:
                 lines.append(f"- **{dec['category']}**: {dec['decision']}")
             lines.append("")
 
@@ -382,7 +390,7 @@ class PromptBuilder:
         # Discoveries
         if context.discoveries:
             lines.append("## Project Discoveries")
-            for disc in context.discoveries[:self._max_discoveries]:
+            for disc in context.discoveries[: self._max_discoveries]:
                 lines.append(f"- {disc}")
 
         return "\n".join(lines) if lines else ""
@@ -414,34 +422,44 @@ class PromptBuilder:
 
         # Category-specific instructions
         if task.category == TaskCategory.API:
-            lines.extend([
-                "6. Include input validation",
-                "7. Add appropriate HTTP status codes",
-                "8. Document the endpoint",
-            ])
+            lines.extend(
+                [
+                    "6. Include input validation",
+                    "7. Add appropriate HTTP status codes",
+                    "8. Document the endpoint",
+                ]
+            )
         elif task.category == TaskCategory.DATA_MODEL:
-            lines.extend([
-                "6. Include field validators",
-                "7. Add model documentation",
-                "8. Include serialization methods",
-            ])
+            lines.extend(
+                [
+                    "6. Include field validators",
+                    "7. Add model documentation",
+                    "8. Include serialization methods",
+                ]
+            )
         elif task.category == TaskCategory.UI:
-            lines.extend([
-                "6. Ensure accessibility (ARIA attributes)",
-                "7. Add loading/error states",
-                "8. Make component responsive",
-            ])
+            lines.extend(
+                [
+                    "6. Ensure accessibility (ARIA attributes)",
+                    "7. Add loading/error states",
+                    "8. Make component responsive",
+                ]
+            )
         elif task.category == TaskCategory.TESTING:
-            lines.extend([
-                "6. Test edge cases",
-                "7. Add integration tests where needed",
-                "8. Aim for high coverage",
-            ])
+            lines.extend(
+                [
+                    "6. Test edge cases",
+                    "7. Add integration tests where needed",
+                    "8. Aim for high coverage",
+                ]
+            )
 
-        lines.extend([
-            "",
-            "Execute this task completely. Create production-quality code.",
-        ])
+        lines.extend(
+            [
+                "",
+                "Execute this task completely. Create production-quality code.",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -464,7 +482,7 @@ class PromptBuilder:
         """Truncate content to max length."""
         if len(content) <= self._max_file_content_length:
             return content
-        return content[:self._max_file_content_length] + "\n... (truncated)"
+        return content[: self._max_file_content_length] + "\n... (truncated)"
 
     # -------------------------------------------------------------------------
     # SPECIALIZED BUILD METHODS
@@ -586,11 +604,13 @@ class PromptBuilder:
             if other_task != task.id:
                 lines.append(f"- {other_task}")
 
-        lines.extend([
-            "",
-            "**Important**: Do not modify files that may be touched by parallel tasks.",
-            "Focus only on your assigned files:",
-        ])
+        lines.extend(
+            [
+                "",
+                "**Important**: Do not modify files that may be touched by parallel tasks.",
+                "Focus only on your assigned files:",
+            ]
+        )
         for f in task.files_to_create + task.files_to_modify:
             lines.append(f"- `{f}`")
 

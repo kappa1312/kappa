@@ -1,21 +1,20 @@
 """Unit tests for the parallel executor."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 
 from src.decomposition.executor import (
+    DryRunExecutor,
+    ParallelExecutor,
+    RetryExecutor,
+    SequentialExecutor,
     TaskExecutionResult,
     WaveExecutionResult,
-    ParallelExecutor,
-    SequentialExecutor,
-    RetryExecutor,
-    DryRunExecutor,
     create_executor,
 )
-from src.decomposition.models import TaskSpec, DependencyGraph, TaskCategory, Complexity
+from src.decomposition.models import Complexity, DependencyGraph, TaskCategory, TaskSpec
 from src.prompts.builder import PromptContext
-
 
 # =============================================================================
 # FIXTURES
@@ -251,7 +250,9 @@ class TestWaveExecutionResult:
         results = [
             TaskExecutionResult(task_id="task-1", success=True, files_created=["a.py", "b.py"]),
             TaskExecutionResult(task_id="task-2", success=True, files_created=["c.py"]),
-            TaskExecutionResult(task_id="task-3", success=True, files_created=["a.py"]),  # Duplicate
+            TaskExecutionResult(
+                task_id="task-3", success=True, files_created=["a.py"]
+            ),  # Duplicate
         ]
 
         wave = WaveExecutionResult(wave_number=0, results=results)

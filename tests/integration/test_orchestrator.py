@@ -1,7 +1,8 @@
 """Integration tests for the orchestrator."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.core.orchestrator import Kappa
 from src.core.state import ProjectStatus
@@ -40,10 +41,12 @@ class TestKappaOrchestrator:
         """Test that run creates project directory."""
         # Mock the graph
         mock_graph = MagicMock()
-        mock_graph.ainvoke = AsyncMock(return_value={
-            "status": ProjectStatus.COMPLETED.value,
-            "final_output": "Test complete",
-        })
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                "status": ProjectStatus.COMPLETED.value,
+                "final_output": "Test complete",
+            }
+        )
         mock_build_graph.return_value = mock_graph
 
         project_path = tmp_path / "test-project"

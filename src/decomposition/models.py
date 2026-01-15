@@ -11,7 +11,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 # =============================================================================
 # ENUMS
 # =============================================================================
@@ -303,41 +302,51 @@ class TaskSpec(BaseModel):
         ]
 
         if self.files_to_create:
-            lines.extend([
-                "## Files to Create",
-                *[f"- {f}" for f in self.files_to_create],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Files to Create",
+                    *[f"- {f}" for f in self.files_to_create],
+                    "",
+                ]
+            )
 
         if self.files_to_modify:
-            lines.extend([
-                "## Files to Modify",
-                *[f"- {f}" for f in self.files_to_modify],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Files to Modify",
+                    *[f"- {f}" for f in self.files_to_modify],
+                    "",
+                ]
+            )
 
         if self.validation_commands:
-            lines.extend([
-                "## Validation",
-                "Run these commands to verify:",
-                *[f"- `{cmd}`" for cmd in self.validation_commands],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Validation",
+                    "Run these commands to verify:",
+                    *[f"- `{cmd}`" for cmd in self.validation_commands],
+                    "",
+                ]
+            )
 
         if self.tags:
-            lines.extend([
-                f"## Tags: {', '.join(self.tags)}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"## Tags: {', '.join(self.tags)}",
+                    "",
+                ]
+            )
 
-        lines.extend([
-            "## Requirements",
-            "- Follow the project's code style and conventions",
-            "- Include appropriate error handling",
-            "- Add type hints for all functions",
-            "- Write clean, maintainable code",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Requirements",
+                "- Follow the project's code style and conventions",
+                "- Include appropriate error handling",
+                "- Add type hints for all functions",
+                "- Write clean, maintainable code",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -409,10 +418,7 @@ class DependencyGraph(BaseModel):
         Returns:
             List of task IDs that depend on this task.
         """
-        return [
-            tid for tid, deps in self.edges.items()
-            if task_id in deps
-        ]
+        return [tid for tid, deps in self.edges.items() if task_id in deps]
 
     def is_ready(self, task_id: str, completed: set[str]) -> bool:
         """Check if a task's dependencies are satisfied.
@@ -446,10 +452,7 @@ class DependencyGraph(BaseModel):
         """
         if wave_number >= len(self.waves):
             return []
-        return [
-            self.nodes[tid] for tid in self.waves[wave_number]
-            if tid in self.nodes
-        ]
+        return [self.nodes[tid] for tid in self.waves[wave_number] if tid in self.nodes]
 
     @property
     def total_waves(self) -> int:
@@ -524,26 +527,32 @@ class Task(BaseModel):
         ]
 
         if self.file_targets:
-            lines.extend([
-                "## Target Files",
-                *[f"- {f}" for f in self.file_targets],
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Target Files",
+                    *[f"- {f}" for f in self.file_targets],
+                    "",
+                ]
+            )
 
         if self.tags:
-            lines.extend([
-                f"## Tags: {', '.join(self.tags)}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"## Tags: {', '.join(self.tags)}",
+                    "",
+                ]
+            )
 
-        lines.extend([
-            "## Requirements",
-            "- Follow the project's code style and conventions",
-            "- Include appropriate error handling",
-            "- Add type hints for all functions",
-            "- Write clean, maintainable code",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Requirements",
+                "- Follow the project's code style and conventions",
+                "- Include appropriate error handling",
+                "- Add type hints for all functions",
+                "- Write clean, maintainable code",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 

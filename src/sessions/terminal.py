@@ -6,28 +6,28 @@ This is the primary execution environment for 80%+ of tasks.
 """
 
 import asyncio
-import os
-import uuid
 import json
+import os
 import shutil
-from pathlib import Path
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from .base import (
-    BaseSessionManager,
-    BaseSession,
-    SessionStatus,
-    SessionResult,
-    SessionConfig,
-    SessionInfo,
-    SessionEvent,
-    SessionEventType,
-)
 from src.core.state import TaskResult
 
+from .base import (
+    BaseSession,
+    BaseSessionManager,
+    SessionConfig,
+    SessionEvent,
+    SessionEventType,
+    SessionInfo,
+    SessionResult,
+    SessionStatus,
+)
 
 # =============================================================================
 # TERMINAL SESSION MANAGER (NEW)
@@ -57,7 +57,7 @@ class TerminalSessionManager(BaseSessionManager):
         self,
         max_concurrent: int = 10,
         default_config: SessionConfig | None = None,
-        claude_path: str | None = None
+        claude_path: str | None = None,
     ):
         """
         Initialize terminal session manager.
@@ -97,7 +97,7 @@ class TerminalSessionManager(BaseSessionManager):
         prompt: str,
         workspace: str,
         context: dict[str, Any],
-        config: SessionConfig | None = None
+        config: SessionConfig | None = None,
     ) -> str:
         """Spawn a new Claude Code terminal session."""
 
@@ -127,23 +127,25 @@ class TerminalSessionManager(BaseSessionManager):
             # Build environment
             env = os.environ.copy()
             env.update(session_config.environment)
-            env['KAPPA_SESSION_ID'] = session_id
-            env['KAPPA_TASK_ID'] = task_id
+            env["KAPPA_SESSION_ID"] = session_id
+            env["KAPPA_TASK_ID"] = task_id
 
             # Build claude command arguments
             args = [
                 self.claude_path,
-                '--print',  # Non-interactive mode
-                '--output-format', 'text',
-                '--max-turns', str(session_config.max_turns),
+                "--print",  # Non-interactive mode
+                "--output-format",
+                "text",
+                "--max-turns",
+                str(session_config.max_turns),
             ]
 
             # Add permission flags if configured
             if session_config.dangerously_skip_permissions:
-                args.append('--dangerously-skip-permissions')
+                args.append("--dangerously-skip-permissions")
 
             # Add prompt
-            args.extend(['-p', prompt])
+            args.extend(["-p", prompt])
 
             logger.debug(f"Spawning: {' '.join(args[:5])}...")
 
@@ -154,13 +156,13 @@ class TerminalSessionManager(BaseSessionManager):
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.PIPE
+                stdin=asyncio.subprocess.PIPE,
             )
 
             # Track session
             async with self._lock:
                 self._processes[session_id] = process
-                self._output_buffers[session_id] = {'stdout': [], 'stderr': []}
+                self._output_buffers[session_id] = {"stdout": [], "stderr": []}
                 self.active_sessions[session_id] = SessionInfo(
                     id=session_id,
                     task_id=task_id,
@@ -170,21 +172,19 @@ class TerminalSessionManager(BaseSessionManager):
                 )
 
             # Start output collection tasks
-            asyncio.create_task(
-                self._collect_output(session_id, 'stdout', process.stdout)
-            )
-            asyncio.create_task(
-                self._collect_output(session_id, 'stderr', process.stderr)
-            )
+            asyncio.create_task(self._collect_output(session_id, "stdout", process.stdout))
+            asyncio.create_task(self._collect_output(session_id, "stderr", process.stderr))
 
             # Emit started event
-            await self._emit_event(SessionEvent(
-                event_type=SessionEventType.STARTED,
-                session_id=session_id,
-                task_id=task_id,
-                timestamp=datetime.utcnow(),
-                data={'workspace': workspace, 'pid': process.pid}
-            ))
+            await self._emit_event(
+                SessionEvent(
+                    event_type=SessionEventType.STARTED,
+                    session_id=session_id,
+                    task_id=task_id,
+                    timestamp=datetime.utcnow(),
+                    data={"workspace": workspace, "pid": process.pid},
+                )
+            )
 
             logger.info(f"Session {session_id} started with PID {process.pid}")
             return session_id
@@ -195,10 +195,7 @@ class TerminalSessionManager(BaseSessionManager):
             raise
 
     async def _collect_output(
-        self,
-        session_id: str,
-        stream_name: str,
-        stream: asyncio.StreamReader
+        self, session_id: str, stream_name: str, stream: asyncio.StreamReader
     ) -> None:
         """Collect output from a stream."""
         try:
@@ -207,7 +204,7 @@ class TerminalSessionManager(BaseSessionManager):
                 if not line:
                     break
 
-                decoded = line.decode('utf-8', errors='replace')
+                decoded = line.decode("utf-8", errors="replace")
 
                 async with self._lock:
                     if session_id in self._output_buffers:
@@ -219,13 +216,15 @@ class TerminalSessionManager(BaseSessionManager):
                     if session_id in self.active_sessions:
                         task_id = self.active_sessions[session_id].task_id or ""
 
-                await self._emit_event(SessionEvent(
-                    event_type=SessionEventType.OUTPUT,
-                    session_id=session_id,
-                    task_id=task_id,
-                    timestamp=datetime.utcnow(),
-                    data={'stream': stream_name, 'line': decoded.strip()}
-                ))
+                await self._emit_event(
+                    SessionEvent(
+                        event_type=SessionEventType.OUTPUT,
+                        session_id=session_id,
+                        task_id=task_id,
+                        timestamp=datetime.utcnow(),
+                        data={"stream": stream_name, "line": decoded.strip()},
+                    )
+                )
 
         except Exception as e:
             logger.debug(f"Output collection ended for {session_id}/{stream_name}: {e}")
@@ -238,37 +237,45 @@ class TerminalSessionManager(BaseSessionManager):
                 if session_id in self.completed_sessions:
                     result = self.completed_sessions[session_id]
                     return {
-                        'status': result.status.value,
-                        'completed': True,
-                        'return_code': result.return_code
+                        "status": result.status.value,
+                        "completed": True,
+                        "return_code": result.return_code,
                     }
-                return {'error': 'Session not found', 'status': SessionStatus.FAILED.value}
+                return {"error": "Session not found", "status": SessionStatus.FAILED.value}
 
             session = self.active_sessions[session_id]
             process = self._processes.get(session_id)
 
         if not process:
-            return {'error': 'Process not found', 'status': SessionStatus.FAILED.value}
+            return {"error": "Process not found", "status": SessionStatus.FAILED.value}
 
         # Check if process is still running
         if process.returncode is None:
-            elapsed = (datetime.utcnow() - session.started_at).total_seconds() if session.started_at else 0
+            elapsed = (
+                (datetime.utcnow() - session.started_at).total_seconds()
+                if session.started_at
+                else 0
+            )
 
             # Try to get memory usage
             memory_mb = await self._get_process_memory(process.pid)
 
             return {
-                'status': SessionStatus.RUNNING.value,
-                'elapsed_seconds': elapsed,
-                'pid': process.pid,
-                'memory_mb': memory_mb,
-                'output_lines': len(self._output_buffers.get(session_id, {}).get('stdout', []))
+                "status": SessionStatus.RUNNING.value,
+                "elapsed_seconds": elapsed,
+                "pid": process.pid,
+                "memory_mb": memory_mb,
+                "output_lines": len(self._output_buffers.get(session_id, {}).get("stdout", [])),
             }
         else:
             return {
-                'status': SessionStatus.COMPLETED.value if process.returncode == 0 else SessionStatus.FAILED.value,
-                'return_code': process.returncode,
-                'elapsed_seconds': session.duration_seconds
+                "status": (
+                    SessionStatus.COMPLETED.value
+                    if process.returncode == 0
+                    else SessionStatus.FAILED.value
+                ),
+                "return_code": process.returncode,
+                "elapsed_seconds": session.duration_seconds,
             }
 
     async def _get_process_memory(self, pid: int | None) -> float | None:
@@ -277,9 +284,13 @@ class TerminalSessionManager(BaseSessionManager):
             return None
         try:
             result = await asyncio.create_subprocess_exec(
-                'ps', '-o', 'rss=', '-p', str(pid),
+                "ps",
+                "-o",
+                "rss=",
+                "-p",
+                str(pid),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL
+                stderr=asyncio.subprocess.DEVNULL,
             )
             stdout, _ = await result.communicate()
             if stdout:
@@ -299,22 +310,22 @@ class TerminalSessionManager(BaseSessionManager):
             if session_id not in self.active_sessions:
                 return SessionResult(
                     session_id=session_id,
-                    task_id='unknown',
+                    task_id="unknown",
                     status=SessionStatus.FAILED,
                     started_at=datetime.utcnow(),
-                    error_message='Session not found'
+                    error_message="Session not found",
                 )
 
             session = self.active_sessions[session_id]
-            buffers = self._output_buffers.get(session_id, {'stdout': [], 'stderr': []})
+            buffers = self._output_buffers.get(session_id, {"stdout": [], "stderr": []})
 
         return SessionResult(
             session_id=session_id,
-            task_id=session.task_id or '',
+            task_id=session.task_id or "",
             status=session.status,
             started_at=session.started_at or datetime.utcnow(),
-            stdout=''.join(buffers['stdout']),
-            stderr=''.join(buffers['stderr'])
+            stdout="".join(buffers["stdout"]),
+            stderr="".join(buffers["stderr"]),
         )
 
     async def send_input(self, session_id: str, input_text: str) -> bool:
@@ -328,7 +339,7 @@ class TerminalSessionManager(BaseSessionManager):
 
         try:
             if process.stdin:
-                process.stdin.write(input_text.encode() + b'\n')
+                process.stdin.write(input_text.encode() + b"\n")
                 await process.stdin.drain()
             return True
         except Exception as e:
@@ -354,7 +365,7 @@ class TerminalSessionManager(BaseSessionManager):
             # Wait a bit for process to terminate
             try:
                 await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 await process.wait()
 
@@ -365,16 +376,16 @@ class TerminalSessionManager(BaseSessionManager):
                     session.completed_at = datetime.utcnow()
 
                 # Create result
-                buffers = self._output_buffers.get(session_id, {'stdout': [], 'stderr': []})
+                buffers = self._output_buffers.get(session_id, {"stdout": [], "stderr": []})
                 result = SessionResult(
                     session_id=session_id,
-                    task_id=session.task_id if session else '',
+                    task_id=session.task_id if session else "",
                     status=SessionStatus.CANCELLED,
                     started_at=session.started_at if session else datetime.utcnow(),
                     completed_at=datetime.utcnow(),
-                    stdout=''.join(buffers['stdout']),
-                    stderr=''.join(buffers['stderr']),
-                    return_code=-15 if not force else -9
+                    stdout="".join(buffers["stdout"]),
+                    stderr="".join(buffers["stderr"]),
+                    return_code=-15 if not force else -9,
                 )
                 self.completed_sessions[session_id] = result
 
@@ -393,10 +404,7 @@ class TerminalSessionManager(BaseSessionManager):
             return False
 
     async def wait_for_completion(
-        self,
-        session_id: str,
-        timeout: int | None = None,
-        poll_interval: float = 1.0
+        self, session_id: str, timeout: int | None = None, poll_interval: float = 1.0
     ) -> SessionResult:
         """Wait for session to complete."""
 
@@ -406,10 +414,10 @@ class TerminalSessionManager(BaseSessionManager):
                     return self.completed_sessions[session_id]
                 return SessionResult(
                     session_id=session_id,
-                    task_id='unknown',
+                    task_id="unknown",
                     status=SessionStatus.FAILED,
                     started_at=datetime.utcnow(),
-                    error_message='Session not found'
+                    error_message="Session not found",
                 )
 
             session = self.active_sessions[session_id]
@@ -418,24 +426,21 @@ class TerminalSessionManager(BaseSessionManager):
         if not process:
             return SessionResult(
                 session_id=session_id,
-                task_id=session.task_id or '',
+                task_id=session.task_id or "",
                 status=SessionStatus.FAILED,
                 started_at=session.started_at or datetime.utcnow(),
-                error_message='Process not found'
+                error_message="Process not found",
             )
 
         effective_timeout = timeout or self.default_config.timeout_seconds
 
         try:
             # Wait for process to complete
-            await asyncio.wait_for(
-                process.wait(),
-                timeout=effective_timeout
-            )
+            await asyncio.wait_for(process.wait(), timeout=effective_timeout)
 
             # Collect final output
             async with self._lock:
-                buffers = self._output_buffers.get(session_id, {'stdout': [], 'stderr': []})
+                buffers = self._output_buffers.get(session_id, {"stdout": [], "stderr": []})
 
                 completed_at = datetime.utcnow()
                 started_at = session.started_at or datetime.utcnow()
@@ -448,21 +453,21 @@ class TerminalSessionManager(BaseSessionManager):
                     status = SessionStatus.FAILED
 
                 # Parse created files from output
-                files_created = self._parse_created_files(buffers['stdout'])
-                files_modified = self._parse_modified_files(buffers['stdout'])
+                files_created = self._parse_created_files(buffers["stdout"])
+                files_modified = self._parse_modified_files(buffers["stdout"])
 
                 result = SessionResult(
                     session_id=session_id,
-                    task_id=session.task_id or '',
+                    task_id=session.task_id or "",
                     status=status,
                     started_at=started_at,
                     completed_at=completed_at,
                     duration_seconds=duration,
-                    stdout=''.join(buffers['stdout']),
-                    stderr=''.join(buffers['stderr']),
+                    stdout="".join(buffers["stdout"]),
+                    stderr="".join(buffers["stderr"]),
                     return_code=process.returncode,
                     files_created=files_created,
-                    files_modified=files_modified
+                    files_modified=files_modified,
                 )
 
                 # Store result
@@ -480,45 +485,53 @@ class TerminalSessionManager(BaseSessionManager):
             self._semaphore.release()
 
             # Emit completed event
-            await self._emit_event(SessionEvent(
-                event_type=SessionEventType.COMPLETED,
-                session_id=session_id,
-                task_id=session.task_id or '',
-                timestamp=completed_at,
-                data={'status': status.value, 'duration': duration, 'return_code': process.returncode}
-            ))
+            await self._emit_event(
+                SessionEvent(
+                    event_type=SessionEventType.COMPLETED,
+                    session_id=session_id,
+                    task_id=session.task_id or "",
+                    timestamp=completed_at,
+                    data={
+                        "status": status.value,
+                        "duration": duration,
+                        "return_code": process.returncode,
+                    },
+                )
+            )
 
             return result
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Session {session_id} timed out after {effective_timeout}s")
 
             # Kill the process
             await self.kill_session(session_id, force=True)
 
             async with self._lock:
-                buffers = self._output_buffers.get(session_id, {'stdout': [], 'stderr': []})
+                buffers = self._output_buffers.get(session_id, {"stdout": [], "stderr": []})
 
             result = SessionResult(
                 session_id=session_id,
-                task_id=session.task_id or '',
+                task_id=session.task_id or "",
                 status=SessionStatus.TIMEOUT,
                 started_at=session.started_at or datetime.utcnow(),
                 completed_at=datetime.utcnow(),
-                stdout=''.join(buffers['stdout']),
-                stderr=''.join(buffers['stderr']),
-                error_message=f'Session timed out after {effective_timeout} seconds'
+                stdout="".join(buffers["stdout"]),
+                stderr="".join(buffers["stderr"]),
+                error_message=f"Session timed out after {effective_timeout} seconds",
             )
 
             self.completed_sessions[session_id] = result
 
-            await self._emit_event(SessionEvent(
-                event_type=SessionEventType.TIMEOUT,
-                session_id=session_id,
-                task_id=session.task_id or '',
-                timestamp=datetime.utcnow(),
-                data={'timeout_seconds': effective_timeout}
-            ))
+            await self._emit_event(
+                SessionEvent(
+                    event_type=SessionEventType.TIMEOUT,
+                    session_id=session_id,
+                    task_id=session.task_id or "",
+                    timestamp=datetime.utcnow(),
+                    data={"timeout_seconds": effective_timeout},
+                )
+            )
 
             return result
 
@@ -528,22 +541,38 @@ class TerminalSessionManager(BaseSessionManager):
         for line in stdout_lines:
             line = line.strip()
             # Look for file creation patterns in output
-            if 'Created' in line or 'Wrote' in line or 'wrote' in line:
+            if "Created" in line or "Wrote" in line or "wrote" in line:
                 # Try to extract file path
-                for pattern in ['Created: ', 'Created ', 'Wrote: ', 'Wrote ', 'wrote ']:
+                for pattern in ["Created: ", "Created ", "Wrote: ", "Wrote ", "wrote "]:
                     if pattern in line:
                         parts = line.split(pattern)
                         if len(parts) > 1:
-                            file_path = parts[1].strip().strip('`').strip("'").strip('"')
-                            if file_path and '/' in file_path or file_path.endswith(('.py', '.ts', '.js', '.tsx', '.jsx', '.json', '.md', '.yml', '.yaml')):
+                            file_path = parts[1].strip().strip("`").strip("'").strip('"')
+                            if (
+                                file_path
+                                and "/" in file_path
+                                or file_path.endswith(
+                                    (
+                                        ".py",
+                                        ".ts",
+                                        ".js",
+                                        ".tsx",
+                                        ".jsx",
+                                        ".json",
+                                        ".md",
+                                        ".yml",
+                                        ".yaml",
+                                    )
+                                )
+                            ):
                                 files.append(file_path)
                                 break
             # Also check for Write tool usage patterns
             if '"tool":"Write"' in line or '"tool": "Write"' in line:
                 try:
                     data = json.loads(line)
-                    if 'file_path' in data.get('input', {}):
-                        files.append(data['input']['file_path'])
+                    if "file_path" in data.get("input", {}):
+                        files.append(data["input"]["file_path"])
                 except (json.JSONDecodeError, KeyError):
                     pass
         return list(set(files))
@@ -554,12 +583,19 @@ class TerminalSessionManager(BaseSessionManager):
         for line in stdout_lines:
             line = line.strip()
             # Look for edit patterns
-            if 'Modified' in line or 'Edited' in line or 'Updated' in line:
-                for pattern in ['Modified: ', 'Edited: ', 'Updated: ', 'Modified ', 'Edited ', 'Updated ']:
+            if "Modified" in line or "Edited" in line or "Updated" in line:
+                for pattern in [
+                    "Modified: ",
+                    "Edited: ",
+                    "Updated: ",
+                    "Modified ",
+                    "Edited ",
+                    "Updated ",
+                ]:
                     if pattern in line:
                         parts = line.split(pattern)
                         if len(parts) > 1:
-                            file_path = parts[1].strip().strip('`').strip("'").strip('"')
+                            file_path = parts[1].strip().strip("`").strip("'").strip('"')
                             if file_path:
                                 files.append(file_path)
                                 break
@@ -567,8 +603,8 @@ class TerminalSessionManager(BaseSessionManager):
             if '"tool":"Edit"' in line or '"tool": "Edit"' in line:
                 try:
                     data = json.loads(line)
-                    if 'file_path' in data.get('input', {}):
-                        files.append(data['input']['file_path'])
+                    if "file_path" in data.get("input", {}):
+                        files.append(data["input"]["file_path"])
                 except (json.JSONDecodeError, KeyError):
                     pass
         return list(set(files))
@@ -616,7 +652,7 @@ class TerminalSession(BaseSession):
 
         try:
             # Try to import claude_agent_sdk first
-            from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+            from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
             options = ClaudeAgentOptions(
                 system_prompt=self.config.system_prompt,
@@ -649,6 +685,7 @@ class TerminalSession(BaseSession):
         try:
             # Execute with timeout
             import anyio
+
             with anyio.fail_after(self.config.timeout_seconds):
                 response = await self._execute_with_client(prompt)
 
@@ -761,6 +798,7 @@ class MockClaudeClient:
     async def execute(self, prompt: str) -> str:
         """Mock execution."""
         import asyncio
+
         await asyncio.sleep(0.1)
         return f"Mock execution completed for: {prompt[:50]}..."
 

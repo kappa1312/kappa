@@ -12,15 +12,14 @@ from uuid import uuid4
 
 from loguru import logger
 
+from src.conflict.detector import ConflictDetector, ConflictReport
+from src.conflict.resolver import ConflictResolver
 from src.core.config import Settings, get_settings
 from src.decomposition.executor import (
-    ParallelExecutor,
-    create_executor,
-    TaskExecutionResult,
     WaveExecutionResult,
+    create_executor,
 )
-from src.prompts.builder import PromptContext, create_prompt_context
-
+from src.prompts.builder import create_prompt_context
 
 # =============================================================================
 # EXCEPTIONS
@@ -110,9 +109,8 @@ class Kappa:
             self.workspace = Path(workspace).resolve()
         else:
             import os
-            self.workspace = Path(
-                os.getenv("KAPPA_WORKING_DIR", "./workspace")
-            ).resolve()
+
+            self.workspace = Path(os.getenv("KAPPA_WORKING_DIR", "./workspace")).resolve()
 
         # Configure logging
         self._configure_logging()
@@ -294,10 +292,9 @@ class Kappa:
             >>> preview = await kappa.preview("Build a REST API")
             >>> print(f"Found {len(preview['tasks'])} tasks")
         """
-        from src.decomposition.models import ProjectRequirements
+        from src.decomposition.dependency_resolver import DependencyResolver
         from src.decomposition.parser import RequirementsParser
         from src.decomposition.task_generator import TaskGenerator
-        from src.decomposition.dependency_resolver import DependencyResolver
 
         logger.info("Generating preview for requirements")
 
@@ -406,10 +403,9 @@ class Kappa:
             ...     max_concurrent=10
             ... )
         """
+        from src.decomposition.dependency_resolver import DependencyResolver
         from src.decomposition.parser import RequirementsParser
         from src.decomposition.task_generator import TaskGenerator
-        from src.decomposition.dependency_resolver import DependencyResolver
-        from src.knowledge.context_manager import SharedContext
 
         project_id = str(uuid4())
         project_name = project_name or f"project-{project_id[:8]}"
@@ -696,9 +692,7 @@ class Kappa:
         Raises:
             ConflictError: If conflicts cannot be resolved automatically.
         """
-        from src.conflict.resolver import ConflictResolver
-
-        resolver = ConflictResolver()
+        resolver = ConflictResolver(workspace_path=self.workspace)
         resolved = []
 
         for conflict in conflicts:
@@ -715,6 +709,82 @@ class Kappa:
                 )
 
         return resolved
+
+    async def analyze_conflicts(
+        self,
+        tasks: list[dict[str, Any]],
+        dependency_graph: dict[str, Any] | None = None,
+    ) -> ConflictReport:
+        """
+        Analyze tasks for potential conflicts before execution.
+
+        Args:
+            tasks: List of task dictionaries.
+            dependency_graph: Optional dependency graph for deeper analysis.
+
+        Returns:
+            ConflictReport with detected conflicts.
+
+        Example:
+            >>> report = await kappa.analyze_conflicts(tasks)
+            >>> if not report.can_proceed:
+            ...     print(f"Found {report.critical_count} critical conflicts")
+        """
+        from src.decomposition.models import DependencyGraph, TaskSpec
+
+        # Convert task dicts to TaskSpec objects
+        task_specs = []
+        for task_dict in tasks:
+            try:
+                task_specs.append(TaskSpec(**task_dict))
+            except Exception as e:
+                logger.warning(f"Could not parse task: {e}")
+
+        # Convert dependency graph if provided
+        dep_graph = None
+        if dependency_graph:
+            try:
+                dep_graph = DependencyGraph(
+                    nodes={t.id: t for t in task_specs},
+                    edges=dependency_graph.get("edges", {}),
+                    waves=dependency_graph.get("waves", []),
+                )
+            except Exception as e:
+                logger.warning(f"Could not parse dependency graph: {e}")
+
+        detector = ConflictDetector()
+        report = detector.analyze(task_specs, dep_graph)
+
+        logger.info(
+            f"Conflict analysis complete: {report.total_conflicts} conflicts "
+            f"({report.critical_count} critical)"
+        )
+
+        return report
+
+    async def resolve_conflict_report(
+        self,
+        report: ConflictReport,
+        auto_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """
+        Resolve conflicts from a ConflictReport.
+
+        Args:
+            report: ConflictReport from analyze_conflicts.
+            auto_only: Only resolve auto-resolvable conflicts.
+
+        Returns:
+            List of resolution result dictionaries.
+
+        Example:
+            >>> report = await kappa.analyze_conflicts(tasks)
+            >>> results = await kappa.resolve_conflict_report(report)
+        """
+        resolver = ConflictResolver(workspace_path=self.workspace)
+        results = await resolver.resolve_all(report, auto_only=auto_only)
+
+        return [r.to_dict() for r in results]
 
     # =========================================================================
     # STATUS AND CONTROL
@@ -734,8 +804,9 @@ class Kappa:
 
         try:
             async with get_db_session() as session:
-                from src.knowledge.models import Project
                 from sqlalchemy import select
+
+                from src.knowledge.models import Project
 
                 stmt = select(Project).where(Project.id == project_id)
                 result = await session.execute(stmt)
@@ -748,8 +819,12 @@ class Kappa:
                         "specification": project.specification,
                         "status": project.status,
                         "workspace_path": project.workspace_path,
-                        "created_at": project.created_at.isoformat() if project.created_at else None,
-                        "completed_at": project.completed_at.isoformat() if project.completed_at else None,
+                        "created_at": (
+                            project.created_at.isoformat() if project.created_at else None
+                        ),
+                        "completed_at": (
+                            project.completed_at.isoformat() if project.completed_at else None
+                        ),
                     }
         except Exception as e:
             logger.warning(f"Could not get status: {e}")
@@ -769,12 +844,13 @@ class Kappa:
         logger.info(f"Cancelling project: {project_id}")
 
         try:
-            from src.knowledge.database import get_db_session
             from src.graph.state import ExecutionStatus
+            from src.knowledge.database import get_db_session
 
             async with get_db_session() as session:
-                from src.knowledge.models import Project
                 from sqlalchemy import update
+
+                from src.knowledge.models import Project
 
                 await session.execute(
                     update(Project)
@@ -811,8 +887,9 @@ class Kappa:
 
         try:
             async with get_db_session() as session:
-                from src.knowledge.models import Project
                 from sqlalchemy import select
+
+                from src.knowledge.models import Project
 
                 stmt = select(Project).order_by(Project.created_at.desc()).limit(limit)
 
@@ -886,8 +963,8 @@ class Kappa:
         Returns:
             Created Project model instance.
         """
-        from src.knowledge.database import get_db_session
         from src.graph.state import ExecutionStatus
+        from src.knowledge.database import get_db_session
 
         async with get_db_session() as session:
             from src.knowledge.models import Project
@@ -922,8 +999,9 @@ class Kappa:
 
         try:
             async with get_db_session() as session:
-                from src.knowledge.models import Project
                 from sqlalchemy import update
+
+                from src.knowledge.models import Project
 
                 completed_at = None
                 if state.get("completed_at"):
@@ -955,13 +1033,14 @@ class Kappa:
             project_id: Project ID.
             error: Error message.
         """
-        from src.knowledge.database import get_db_session
         from src.graph.state import ExecutionStatus
+        from src.knowledge.database import get_db_session
 
         try:
             async with get_db_session() as session:
-                from src.knowledge.models import Project
                 from sqlalchemy import update
+
+                from src.knowledge.models import Project
 
                 await session.execute(
                     update(Project)

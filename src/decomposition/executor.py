@@ -7,15 +7,15 @@ and result tracking.
 """
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from loguru import logger
 
-from src.decomposition.models import TaskSpec, DependencyGraph
-from src.sessions.base import SessionConfig, SessionResult, SessionStatus
-from src.prompts.builder import PromptBuilder, PromptContext, get_prompt_builder
-
+from src.decomposition.models import DependencyGraph, TaskSpec
+from src.prompts.builder import PromptContext, get_prompt_builder
+from src.sessions.base import SessionConfig, SessionResult
 
 # =============================================================================
 # RESULT MODELS
@@ -250,6 +250,7 @@ class ParallelExecutor:
         if self._session_manager is None:
             try:
                 from src.sessions.terminal import TerminalSessionManager
+
                 self._session_manager = TerminalSessionManager(
                     max_concurrent=self.max_concurrent,
                     default_config=SessionConfig(
@@ -307,7 +308,7 @@ class ParallelExecutor:
 
         # Process results
         task_results = []
-        for task, result in zip(tasks, results):
+        for task, result in zip(tasks, results, strict=False):
             if isinstance(result, Exception):
                 error_result = TaskExecutionResult(
                     task_id=task.id,
@@ -414,9 +415,7 @@ class ParallelExecutor:
 
             # Check if we should abort
             if wave_result.success_rate < 0.5:
-                logger.error(
-                    f"Wave {wave_number} had >50% failure rate, aborting execution"
-                )
+                logger.error(f"Wave {wave_number} had >50% failure rate, aborting execution")
                 break
 
         return results
@@ -438,7 +437,7 @@ class ParallelExecutor:
                     ),
                     timeout=self.timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error(f"Task {task.id} timed out after {self.timeout}s")
                 return TaskExecutionResult(
                     task_id=task.id,
@@ -762,9 +761,7 @@ class RetryExecutor:
 
             await asyncio.sleep(self.retry_delay)
 
-            retry_result = await self.executor.execute_wave(
-                failed_ids, state, wave_number, context
-            )
+            retry_result = await self.executor.execute_wave(failed_ids, state, wave_number, context)
 
             # Update results with retry outcomes
             for retry_task_result in retry_result.results:
@@ -775,9 +772,7 @@ class RetryExecutor:
                         break
 
             # Update failed IDs for next retry
-            failed_ids = [
-                r.task_id for r in retry_result.results if not r.success
-            ]
+            failed_ids = [r.task_id for r in retry_result.results if not r.success]
 
         return result
 
@@ -874,15 +869,19 @@ class DryRunExecutor:
 
             success = random.random() < self.success_rate
 
-            results.append(TaskExecutionResult(
-                task_id=task.get("id", "unknown"),
-                success=success,
-                output=f"Dry run output for {task.get('title', 'unknown')}" if success else None,
-                error="Simulated failure" if not success else None,
-                files_created=task.get("files_to_create", []),
-                files_modified=task.get("files_to_modify", []),
-                wave_number=wave_number,
-            ))
+            results.append(
+                TaskExecutionResult(
+                    task_id=task.get("id", "unknown"),
+                    success=success,
+                    output=(
+                        f"Dry run output for {task.get('title', 'unknown')}" if success else None
+                    ),
+                    error="Simulated failure" if not success else None,
+                    files_created=task.get("files_to_create", []),
+                    files_modified=task.get("files_to_modify", []),
+                    wave_number=wave_number,
+                )
+            )
 
         return WaveExecutionResult(
             wave_number=wave_number,

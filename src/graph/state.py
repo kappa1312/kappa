@@ -11,7 +11,6 @@ from enum import Enum
 from typing import Annotated, Any, NotRequired, TypedDict
 from uuid import uuid4
 
-
 # =============================================================================
 # ENUMS
 # =============================================================================
@@ -287,11 +286,7 @@ def get_pending_task_ids(state: KappaState) -> list[str]:
     skipped = set(state.get("skipped_tasks", []))
     done = completed | failed | skipped
 
-    return [
-        task["id"]
-        for task in state.get("tasks", [])
-        if task["id"] not in done
-    ]
+    return [task["id"] for task in state.get("tasks", []) if task["id"] not in done]
 
 
 def get_wave_task_ids(state: KappaState, wave_number: int) -> list[str]:
@@ -499,11 +494,10 @@ async def reconstruct_state_from_db(project_id: str) -> KappaState | None:
     try:
         async with get_db_session() as session:
             from sqlalchemy import select
+
             from src.knowledge.models import Project
 
-            result = await session.execute(
-                select(Project).where(Project.id == project_id)
-            )
+            result = await session.execute(select(Project).where(Project.id == project_id))
             project = result.scalar_one_or_none()
 
             if not project:
@@ -546,6 +540,7 @@ async def save_state_to_db(state: KappaState) -> bool:
     try:
         async with get_db_session() as session:
             from sqlalchemy import update
+
             from src.knowledge.models import Project
 
             await session.execute(
@@ -553,9 +548,11 @@ async def save_state_to_db(state: KappaState) -> bool:
                 .where(Project.id == state.get("project_id"))
                 .values(
                     status=state.get("status"),
-                    completed_at=datetime.fromisoformat(state["completed_at"])
-                    if state.get("completed_at")
-                    else None,
+                    completed_at=(
+                        datetime.fromisoformat(state["completed_at"])
+                        if state.get("completed_at")
+                        else None
+                    ),
                 )
             )
             await session.commit()

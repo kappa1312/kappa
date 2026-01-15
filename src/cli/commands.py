@@ -1,7 +1,6 @@
 """Additional CLI commands for Kappa."""
 
 from pathlib import Path
-from typing import Optional
 
 import anyio
 import typer
@@ -15,7 +14,7 @@ console = Console()
 
 @app.command()
 def logs(
-    session_id: Optional[str] = typer.Argument(
+    session_id: str | None = typer.Argument(
         None,
         help="Session ID to view logs for",
     ),
@@ -94,11 +93,11 @@ def resolve(
 
 @app.command()
 def metrics(
-    project_id: Optional[str] = typer.Argument(
+    project_id: str | None = typer.Argument(
         None,
         help="Project ID to show metrics for",
     ),
-    export: Optional[Path] = typer.Option(
+    export: Path | None = typer.Option(
         None,
         "--export",
         "-e",
@@ -131,7 +130,7 @@ def config(
         "--show",
         help="Show current configuration",
     ),
-    set_value: Optional[str] = typer.Option(
+    set_value: str | None = typer.Option(
         None,
         "--set",
         help="Set a configuration value (key=value)",

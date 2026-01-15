@@ -227,11 +227,7 @@ def get_pending_tasks(state: KappaState) -> list[str]:
     skipped = set(state.get("skipped_tasks", []))
     done = completed | failed | skipped
 
-    return [
-        task["id"]
-        for task in state.get("tasks", [])
-        if task["id"] not in done
-    ]
+    return [task["id"] for task in state.get("tasks", []) if task["id"] not in done]
 
 
 def get_wave_tasks(state: KappaState, wave: int) -> list[str]:

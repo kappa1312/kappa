@@ -18,7 +18,6 @@ from src.decomposition.models import (
     TaskCategory,
 )
 
-
 # =============================================================================
 # REQUIREMENTS PARSER (Claude API)
 # =============================================================================
@@ -121,10 +120,9 @@ Return ONLY valid JSON, no additional text."""
 
         if self._client is None:
             from src.core.config import get_settings
+
             settings = get_settings()
-            self._client = AsyncAnthropic(
-                api_key=settings.anthropic_api_key.get_secret_value()
-            )
+            self._client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
 
         prompt = self.PARSE_PROMPT.format(specification=text)
 
@@ -133,9 +131,7 @@ Return ONLY valid JSON, no additional text."""
         response = await self._client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2000,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
         )
 
         # Extract JSON from response
@@ -225,8 +221,7 @@ Return ONLY valid JSON, no additional text."""
         # Extract tech stack
         tech_stack_raw = data.get("tech_stack", {})
         tech_stack = {
-            k: v for k, v in tech_stack_raw.items()
-            if v and v != "null" and k != "additional"
+            k: v for k, v in tech_stack_raw.items() if v and v != "null" and k != "additional"
         }
         if tech_stack_raw.get("additional"):
             tech_stack["additional"] = tech_stack_raw["additional"]
@@ -403,8 +398,17 @@ Return ONLY valid JSON, no additional text."""
 
         # Check for common pages mentioned
         common_pages = [
-            "home", "about", "contact", "login", "register", "signup",
-            "dashboard", "profile", "settings", "admin", "landing",
+            "home",
+            "about",
+            "contact",
+            "login",
+            "register",
+            "signup",
+            "dashboard",
+            "profile",
+            "settings",
+            "admin",
+            "landing",
         ]
         for page in common_pages:
             if page in text_lower and page not in pages:
@@ -426,12 +430,30 @@ Return ONLY valid JSON, no additional text."""
 
         # Common integrations
         integration_keywords = [
-            "stripe", "paypal", "oauth", "google auth", "github auth",
-            "sendgrid", "twilio", "aws", "firebase", "supabase",
-            "cloudflare", "vercel", "netlify", "heroku",
-            "slack", "discord", "telegram", "whatsapp",
-            "google analytics", "mixpanel", "segment",
-            "openai", "anthropic", "claude",
+            "stripe",
+            "paypal",
+            "oauth",
+            "google auth",
+            "github auth",
+            "sendgrid",
+            "twilio",
+            "aws",
+            "firebase",
+            "supabase",
+            "cloudflare",
+            "vercel",
+            "netlify",
+            "heroku",
+            "slack",
+            "discord",
+            "telegram",
+            "whatsapp",
+            "google analytics",
+            "mixpanel",
+            "segment",
+            "openai",
+            "anthropic",
+            "claude",
         ]
 
         for integration in integration_keywords:
@@ -488,9 +510,29 @@ Return ONLY valid JSON, no additional text."""
         # Extract key nouns
         words = re.findall(r"\b[a-z]{3,}\b", text.lower())
         common_words = {
-            "the", "and", "with", "for", "that", "this", "from", "will",
-            "have", "has", "can", "are", "was", "were", "been", "being",
-            "build", "create", "make", "use", "using", "need", "want",
+            "the",
+            "and",
+            "with",
+            "for",
+            "that",
+            "this",
+            "from",
+            "will",
+            "have",
+            "has",
+            "can",
+            "are",
+            "was",
+            "were",
+            "been",
+            "being",
+            "build",
+            "create",
+            "make",
+            "use",
+            "using",
+            "need",
+            "want",
         }
         meaningful = [w for w in words if w not in common_words][:3]
 
@@ -523,47 +565,110 @@ class SpecificationParser:
     # Keywords that indicate different task categories
     CATEGORY_KEYWORDS: dict[TaskCategory, list[str]] = {
         TaskCategory.SETUP: [
-            "setup", "install", "configure", "initialize", "bootstrap",
-            "create project", "scaffold",
+            "setup",
+            "install",
+            "configure",
+            "initialize",
+            "bootstrap",
+            "create project",
+            "scaffold",
         ],
         TaskCategory.INFRASTRUCTURE: [
-            "database", "postgresql", "redis", "docker", "kubernetes",
-            "infrastructure", "deployment", "ci/cd", "pipeline",
+            "database",
+            "postgresql",
+            "redis",
+            "docker",
+            "kubernetes",
+            "infrastructure",
+            "deployment",
+            "ci/cd",
+            "pipeline",
         ],
         TaskCategory.DATA_MODEL: [
-            "model", "schema", "entity", "table", "migration",
-            "orm", "sqlalchemy", "pydantic",
+            "model",
+            "schema",
+            "entity",
+            "table",
+            "migration",
+            "orm",
+            "sqlalchemy",
+            "pydantic",
         ],
         TaskCategory.BUSINESS_LOGIC: [
-            "service", "logic", "process", "calculate", "validate",
-            "transform", "business", "domain",
+            "service",
+            "logic",
+            "process",
+            "calculate",
+            "validate",
+            "transform",
+            "business",
+            "domain",
         ],
         TaskCategory.API: [
-            "api", "endpoint", "rest", "graphql", "route", "controller",
-            "request", "response", "http",
+            "api",
+            "endpoint",
+            "rest",
+            "graphql",
+            "route",
+            "controller",
+            "request",
+            "response",
+            "http",
         ],
         TaskCategory.UI: [
-            "ui", "frontend", "component", "page", "view", "template",
-            "form", "button", "interface", "cli",
+            "ui",
+            "frontend",
+            "component",
+            "page",
+            "view",
+            "template",
+            "form",
+            "button",
+            "interface",
+            "cli",
         ],
         TaskCategory.TESTING: [
-            "test", "spec", "pytest", "unittest", "coverage",
-            "integration test", "e2e", "mock",
+            "test",
+            "spec",
+            "pytest",
+            "unittest",
+            "coverage",
+            "integration test",
+            "e2e",
+            "mock",
         ],
         TaskCategory.DOCUMENTATION: [
-            "documentation", "readme", "docstring", "api docs",
-            "swagger", "openapi",
+            "documentation",
+            "readme",
+            "docstring",
+            "api docs",
+            "swagger",
+            "openapi",
         ],
         TaskCategory.DEPLOYMENT: [
-            "deploy", "release", "publish", "production",
-            "staging", "environment",
+            "deploy",
+            "release",
+            "publish",
+            "production",
+            "staging",
+            "environment",
         ],
         TaskCategory.INTEGRATION: [
-            "integrate", "integration", "third-party", "external",
-            "webhook", "oauth", "stripe", "payment",
+            "integrate",
+            "integration",
+            "third-party",
+            "external",
+            "webhook",
+            "oauth",
+            "stripe",
+            "payment",
         ],
         TaskCategory.TYPES: [
-            "type", "interface", "typescript", "typing", "schema",
+            "type",
+            "interface",
+            "typescript",
+            "typing",
+            "schema",
         ],
     }
 
@@ -577,9 +682,7 @@ class SpecificationParser:
 
     def __init__(self) -> None:
         """Initialize the specification parser."""
-        self._compiled_patterns = [
-            re.compile(p, re.IGNORECASE) for p in self.ENTITY_PATTERNS
-        ]
+        self._compiled_patterns = [re.compile(p, re.IGNORECASE) for p in self.ENTITY_PATTERNS]
 
     def parse(self, specification: str) -> list[ParsedRequirement]:
         """

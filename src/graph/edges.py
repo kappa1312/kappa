@@ -10,7 +10,6 @@ from loguru import logger
 
 from src.graph.state import ExecutionStatus, KappaState
 
-
 # =============================================================================
 # PRIMARY ROUTING FUNCTIONS
 # =============================================================================
@@ -146,9 +145,7 @@ def should_continue_execution(
     if total_executed > 0:
         failure_rate = len(failed_tasks) / total_executed
         if failure_rate > 0.5:
-            logger.warning(
-                f"Critical failure rate ({failure_rate:.1%}), routing to handle_error"
-            )
+            logger.warning(f"Critical failure rate ({failure_rate:.1%}), routing to handle_error")
             return "handle_error"
 
     # More waves to execute?
@@ -185,14 +182,12 @@ def route_after_merge(
     # Check for unresolved critical conflicts
     conflicts = state.get("conflicts", [])
     unresolved_critical = [
-        c for c in conflicts
-        if not c.get("resolved") and c.get("conflict_type") == "critical"
+        c for c in conflicts if not c.get("resolved") and c.get("conflict_type") == "critical"
     ]
 
     if unresolved_critical:
         logger.warning(
-            f"{len(unresolved_critical)} critical conflicts unresolved, "
-            f"routing to handle_error"
+            f"{len(unresolved_critical)} critical conflicts unresolved, " f"routing to handle_error"
         )
         return "handle_error"
 

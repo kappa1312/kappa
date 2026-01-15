@@ -16,12 +16,12 @@ from typing import Any
 
 from loguru import logger
 
+from src.conflict.detector import ConflictDetector
 from src.graph.state import (
     ExecutionStatus,
     KappaState,
     create_execution_log,
 )
-
 
 # =============================================================================
 # NODE 1: PARSE REQUIREMENTS
@@ -247,8 +247,8 @@ async def resolve_dependencies_node(state: KappaState) -> dict[str, Any]:
         }
 
     try:
-        from src.decomposition.models import TaskSpec
         from src.decomposition.dependency_resolver import DependencyResolver
+        from src.decomposition.models import TaskSpec
 
         # Reconstruct TaskSpec objects
         tasks = [TaskSpec(**t) for t in tasks_data]
@@ -387,6 +387,47 @@ async def execute_wave_node(state: KappaState) -> dict[str, Any]:
             ],
         }
 
+    # Pre-execution conflict detection for current wave
+    wave_conflicts = []
+    try:
+        from src.decomposition.models import TaskSpec
+
+        wave_task_specs = [TaskSpec(**t) for t in wave_tasks]
+        detector = ConflictDetector()
+        wave_report = detector.analyze_wave(
+            wave_tasks=wave_task_specs,
+            completed_tasks=set(state.get("completed_tasks", [])),
+            context=state.get("global_context", {}),
+        )
+
+        if not wave_report.can_proceed:
+            logger.error(f"Wave {current_wave} has critical conflicts, cannot proceed")
+            return {
+                "status": ExecutionStatus.FAILED.value,
+                "error": f"Critical conflicts in wave {current_wave}",
+                "error_node": "execute_wave",
+                "conflicts": [c.to_dict() for c in wave_report.conflicts],
+                "execution_logs": [
+                    create_execution_log(
+                        "execute_wave",
+                        "error",
+                        details={
+                            "wave": current_wave,
+                            "conflict_count": wave_report.total_conflicts,
+                            "critical_count": wave_report.critical_count,
+                        },
+                        error="Critical conflicts detected",
+                    )
+                ],
+            }
+
+        wave_conflicts = [c.to_dict() for c in wave_report.conflicts]
+        if wave_conflicts:
+            logger.warning(f"Wave {current_wave} has {len(wave_conflicts)} non-critical conflicts")
+
+    except Exception as e:
+        logger.warning(f"Could not perform wave conflict analysis: {e}")
+
     try:
         # Execute tasks in parallel
         completed: list[str] = []
@@ -415,11 +456,13 @@ async def execute_wave_node(state: KappaState) -> dict[str, Any]:
             for task in wave_tasks:
                 completed.append(task["id"])
                 created_files.extend(task.get("files_to_create", []))
-                task_results.append({
-                    "task_id": task["id"],
-                    "success": True,
-                    "simulated": True,
-                })
+                task_results.append(
+                    {
+                        "task_id": task["id"],
+                        "success": True,
+                        "simulated": True,
+                    }
+                )
 
         logger.info(
             f"Wave {current_wave + 1} complete: "
@@ -524,13 +567,15 @@ async def merge_outputs_node(state: KappaState) -> dict[str, Any]:
         conflicts: list[dict[str, Any]] = []
         for file_path, writers in file_writers.items():
             if len(writers) > 1:
-                conflicts.append({
-                    "file_path": file_path,
-                    "task_ids": writers,
-                    "conflict_type": "multiple_writers",
-                    "resolved": False,
-                    "detected_at": datetime.utcnow().isoformat(),
-                })
+                conflicts.append(
+                    {
+                        "file_path": file_path,
+                        "task_ids": writers,
+                        "conflict_type": "multiple_writers",
+                        "resolved": False,
+                        "detected_at": datetime.utcnow().isoformat(),
+                    }
+                )
 
         if conflicts:
             logger.warning(f"Detected {len(conflicts)} file conflicts")
@@ -823,8 +868,8 @@ async def decomposition_node(state: KappaState) -> dict[str, Any]:
     spec = state.get("specification", state.get("requirements_text", ""))
 
     try:
-        from src.decomposition.task_generator import LegacyTaskGenerator
         from src.decomposition.dependency_resolver import DependencyResolver
+        from src.decomposition.task_generator import LegacyTaskGenerator
 
         generator = LegacyTaskGenerator()
         tasks = await generator.generate(spec)
@@ -924,9 +969,7 @@ async def finalize_node(state: KappaState) -> dict[str, Any]:
     conflicts = state.get("conflicts", [])
     if conflicts:
         unresolved = [c for c in conflicts if not c.get("resolved")]
-        summary_lines.append(
-            f"Conflicts: {len(conflicts)} total, {len(unresolved)} unresolved"
-        )
+        summary_lines.append(f"Conflicts: {len(conflicts)} total, {len(unresolved)} unresolved")
 
     final_output = "\n".join(summary_lines)
 

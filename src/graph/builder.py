@@ -34,21 +34,21 @@ def create_orchestration_graph() -> Any:
         >>> result = await graph.ainvoke(initial_state)
     """
     from src.graph.edges import (
+        route_after_dependency_resolution,
+        route_after_merge,
         route_after_parsing,
         route_after_task_generation,
-        route_after_dependency_resolution,
-        should_continue_execution,
-        route_after_merge,
         route_after_validation,
+        should_continue_execution,
     )
     from src.graph.nodes import (
-        parse_requirements_node,
-        generate_tasks_node,
-        resolve_dependencies_node,
         execute_wave_node,
-        merge_outputs_node,
-        validate_node,
+        generate_tasks_node,
         handle_error_node,
+        merge_outputs_node,
+        parse_requirements_node,
+        resolve_dependencies_node,
+        validate_node,
     )
 
     logger.info("Building Kappa orchestration graph")
@@ -181,21 +181,21 @@ async def build_kappa_graph_with_persistence(settings: Settings) -> Any:
         >>> result = await graph.ainvoke(state, config={"configurable": {"thread_id": "123"}})
     """
     from src.graph.edges import (
+        route_after_dependency_resolution,
+        route_after_merge,
         route_after_parsing,
         route_after_task_generation,
-        route_after_dependency_resolution,
-        should_continue_execution,
-        route_after_merge,
         route_after_validation,
+        should_continue_execution,
     )
     from src.graph.nodes import (
-        parse_requirements_node,
-        generate_tasks_node,
-        resolve_dependencies_node,
         execute_wave_node,
-        merge_outputs_node,
-        validate_node,
+        generate_tasks_node,
         handle_error_node,
+        merge_outputs_node,
+        parse_requirements_node,
+        resolve_dependencies_node,
+        validate_node,
     )
 
     logger.info("Building Kappa graph with PostgreSQL persistence")
@@ -204,9 +204,7 @@ async def build_kappa_graph_with_persistence(settings: Settings) -> Any:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
         # Create checkpointer
-        checkpointer = AsyncPostgresSaver.from_conn_string(
-            settings.database_url_async
-        )
+        checkpointer = AsyncPostgresSaver.from_conn_string(settings.database_url_async)
         await checkpointer.setup()
 
     except ImportError:

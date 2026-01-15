@@ -39,15 +39,19 @@ class Project(Base):
     project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     status: Mapped[str] = mapped_column(
         Enum(
-            "pending", "decomposing", "running", "resolving_conflicts",
-            "completed", "failed",
+            "pending",
+            "decomposing",
+            "running",
+            "resolving_conflicts",
+            "completed",
+            "failed",
             name="project_status",
         ),
         default="pending",
     )
     config: Mapped[dict] = mapped_column(JSON, default=dict)
-    final_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    final_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -57,7 +61,7 @@ class Project(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -109,17 +113,17 @@ class Task(Base):
     )
     dependencies: Mapped[list] = mapped_column(JSON, default=list)
     file_targets: Mapped[list] = mapped_column(JSON, default=list)
-    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
+    started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -139,9 +143,7 @@ class Session(Base):
     """Session model - represents a Claude session."""
 
     __tablename__ = "sessions"
-    __table_args__ = (
-        Index("ix_sessions_project_status", "project_id", "status"),
-    )
+    __table_args__ = (Index("ix_sessions_project_status", "project_id", "status"),)
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -152,7 +154,7 @@ class Session(Base):
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
     )
-    task_id: Mapped[Optional[str]] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -160,8 +162,8 @@ class Session(Base):
         Enum("starting", "running", "completed", "failed", "timeout", name="session_status"),
         default="starting",
     )
-    output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     files_modified: Mapped[list] = mapped_column(JSON, default=list)
     token_usage: Mapped[dict] = mapped_column(JSON, default=dict)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -169,7 +171,7 @@ class Session(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -190,9 +192,7 @@ class ContextSnapshot(Base):
     """Context snapshot - stores context shared between sessions."""
 
     __tablename__ = "context_snapshots"
-    __table_args__ = (
-        Index("ix_context_session_type", "session_id", "context_type"),
-    )
+    __table_args__ = (Index("ix_context_session_type", "session_id", "context_type"),)
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -226,9 +226,7 @@ class Decision(Base):
     """Decision model - stores architectural and design decisions."""
 
     __tablename__ = "decisions"
-    __table_args__ = (
-        Index("ix_decisions_project_category", "project_id", "category"),
-    )
+    __table_args__ = (Index("ix_decisions_project_category", "project_id", "category"),)
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -244,9 +242,9 @@ class Decision(Base):
         nullable=False,
     )  # "architecture", "technology", "pattern", etc.
     decision: Mapped[str] = mapped_column(Text, nullable=False)
-    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     alternatives_considered: Mapped[list] = mapped_column(JSON, default=list)
-    made_by: Mapped[Optional[str]] = mapped_column(
+    made_by: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
     )  # session_id or "orchestrator"
@@ -284,15 +282,15 @@ class Conflict(Base):
         default="merge",
     )  # "merge", "overwrite", "semantic"
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    content_a: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    content_b: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    resolution: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    resolved_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    content_a: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_b: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+    resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

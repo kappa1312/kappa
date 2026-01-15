@@ -5,17 +5,17 @@ All session types (terminal, web, native) inherit from this.
 This module provides the foundation for parallel Claude session execution.
 """
 
-from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Any, Callable, Optional
-from uuid import uuid4
-from enum import Enum
-from dataclasses import dataclass, field
 import asyncio
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
+from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
 from loguru import logger
-
+from pydantic import BaseModel, ConfigDict, Field
 
 # =============================================================================
 # ENUMS
@@ -24,6 +24,7 @@ from loguru import logger
 
 class SessionStatus(str, Enum):
     """Possible states for a session."""
+
     PENDING = "pending"
     QUEUED = "queued"
     STARTING = "starting"
@@ -37,6 +38,7 @@ class SessionStatus(str, Enum):
 
 class SessionPriority(int, Enum):
     """Priority levels for session scheduling."""
+
     CRITICAL = 0
     HIGH = 1
     NORMAL = 2
@@ -46,6 +48,7 @@ class SessionPriority(int, Enum):
 
 class SessionEventType(str, Enum):
     """Types of session events for callbacks."""
+
     STARTED = "started"
     PROGRESS = "progress"
     OUTPUT = "output"
@@ -63,30 +66,31 @@ class SessionEventType(str, Enum):
 @dataclass
 class SessionResult:
     """Result of a completed session."""
+
     session_id: str
     task_id: str
     status: SessionStatus
     started_at: datetime
-    completed_at: Optional[datetime] = None
-    duration_seconds: Optional[float] = None
+    completed_at: datetime | None = None
+    duration_seconds: float | None = None
 
     # Output
     stdout: str = ""
     stderr: str = ""
-    return_code: Optional[int] = None
+    return_code: int | None = None
 
     # Files
     files_created: list[str] = field(default_factory=list)
     files_modified: list[str] = field(default_factory=list)
 
     # Metrics
-    memory_peak_mb: Optional[float] = None
-    cpu_time_seconds: Optional[float] = None
+    memory_peak_mb: float | None = None
+    cpu_time_seconds: float | None = None
     token_usage: dict[str, int] = field(default_factory=dict)
 
     # Error info
-    error_message: Optional[str] = None
-    error_traceback: Optional[str] = None
+    error_message: str | None = None
+    error_traceback: str | None = None
 
     def is_success(self) -> bool:
         """Check if session completed successfully."""
@@ -97,28 +101,29 @@ class SessionResult:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
-            'session_id': self.session_id,
-            'task_id': self.task_id,
-            'status': self.status.value,
-            'started_at': self.started_at.isoformat(),
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
-            'duration_seconds': self.duration_seconds,
-            'stdout': self.stdout,
-            'stderr': self.stderr,
-            'return_code': self.return_code,
-            'files_created': self.files_created,
-            'files_modified': self.files_modified,
-            'memory_peak_mb': self.memory_peak_mb,
-            'cpu_time_seconds': self.cpu_time_seconds,
-            'token_usage': self.token_usage,
-            'error_message': self.error_message,
-            'error_traceback': self.error_traceback,
+            "session_id": self.session_id,
+            "task_id": self.task_id,
+            "status": self.status.value,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "duration_seconds": self.duration_seconds,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "return_code": self.return_code,
+            "files_created": self.files_created,
+            "files_modified": self.files_modified,
+            "memory_peak_mb": self.memory_peak_mb,
+            "cpu_time_seconds": self.cpu_time_seconds,
+            "token_usage": self.token_usage,
+            "error_message": self.error_message,
+            "error_traceback": self.error_traceback,
         }
 
 
 @dataclass
 class SessionEvent:
     """Event emitted during session lifecycle."""
+
     event_type: SessionEventType
     session_id: str
     task_id: str
@@ -128,11 +133,11 @@ class SessionEvent:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
-            'event_type': self.event_type.value,
-            'session_id': self.session_id,
-            'task_id': self.task_id,
-            'timestamp': self.timestamp.isoformat(),
-            'data': self.data,
+            "event_type": self.event_type.value,
+            "session_id": self.session_id,
+            "task_id": self.task_id,
+            "timestamp": self.timestamp.isoformat(),
+            "data": self.data,
         }
 
 
@@ -172,12 +177,14 @@ class SessionConfig(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict, description="Additional env vars")
 
     # Priority
-    priority: SessionPriority = Field(default=SessionPriority.NORMAL, description="Session priority")
+    priority: SessionPriority = Field(
+        default=SessionPriority.NORMAL, description="Session priority"
+    )
 
     # Tools
     allowed_tools: list[str] = Field(
         default_factory=lambda: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        description="Allowed tools for the session"
+        description="Allowed tools for the session",
     )
 
 
@@ -235,11 +242,7 @@ class BaseSessionManager(ABC):
         ...         return session_id
     """
 
-    def __init__(
-        self,
-        max_concurrent: int = 10,
-        default_config: SessionConfig | None = None
-    ):
+    def __init__(self, max_concurrent: int = 10, default_config: SessionConfig | None = None):
         """
         Initialize the session manager.
 
@@ -282,7 +285,7 @@ class BaseSessionManager(ABC):
         prompt: str,
         workspace: str,
         context: dict[str, Any],
-        config: SessionConfig | None = None
+        config: SessionConfig | None = None,
     ) -> str:
         """
         Create and start a new session.
@@ -348,10 +351,7 @@ class BaseSessionManager(ABC):
 
     @abstractmethod
     async def wait_for_completion(
-        self,
-        session_id: str,
-        timeout: int | None = None,
-        poll_interval: float = 1.0
+        self, session_id: str, timeout: int | None = None, poll_interval: float = 1.0
     ) -> SessionResult:
         """
         Wait for a session to complete.
@@ -418,7 +418,9 @@ class BaseSessionManager(ABC):
 # =============================================================================
 
 # Re-export for backward compatibility with existing code
-from src.core.state import SessionInfo as LegacySessionInfo, SessionStatus as LegacySessionStatus, TaskResult
+from src.core.state import (
+    TaskResult,
+)
 
 
 class BaseSession(ABC):
@@ -472,11 +474,13 @@ class BaseSession(ABC):
 
     def record_message(self, role: str, content: str) -> None:
         """Record a message in the session history."""
-        self._messages.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+        self._messages.append(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
     def get_history(self) -> list[dict[str, Any]]:
         """Get the session message history."""

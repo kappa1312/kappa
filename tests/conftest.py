@@ -1,7 +1,7 @@
 """Pytest configuration and shared fixtures."""
 
 import os
-from typing import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,10 +9,7 @@ import pytest_asyncio
 
 # Set test environment
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test-key-for-testing")
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+asyncpg://test:test@localhost:5432/kappa_test"
-)
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/kappa_test")
 os.environ.setdefault("KAPPA_DEBUG", "true")
 os.environ.setdefault("KAPPA_LOG_LEVEL", "DEBUG")
 
@@ -20,7 +17,7 @@ os.environ.setdefault("KAPPA_LOG_LEVEL", "DEBUG")
 @pytest.fixture
 def mock_settings() -> Generator:
     """Provide mock settings for testing."""
-    from src.core.config import Settings, clear_settings_cache
+    from src.core.config import clear_settings_cache
 
     # Clear any cached settings
     clear_settings_cache()

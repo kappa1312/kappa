@@ -1,9 +1,10 @@
 """Integration tests for session management."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.sessions.base import BaseSession, SessionConfig
+import pytest
+
+from src.sessions.base import SessionConfig
 from src.sessions.router import SessionRouter
 from src.sessions.terminal import TerminalSession
 
@@ -120,11 +121,13 @@ class TestSessionRouter:
         # Setup mock session
         mock_session = AsyncMock()
         mock_session.id = "mock-session"
-        mock_session.execute = AsyncMock(return_value=MagicMock(
-            success=True,
-            task_id="task-1",
-            session_id="mock-session",
-        ))
+        mock_session.execute = AsyncMock(
+            return_value=MagicMock(
+                success=True,
+                task_id="task-1",
+                session_id="mock-session",
+            )
+        )
         mock_session.start = AsyncMock()
         mock_session.close = AsyncMock()
         MockSession.return_value = mock_session

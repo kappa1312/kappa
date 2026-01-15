@@ -139,7 +139,9 @@ src/
             lines.append("### Key Decisions")
             for dec in decisions[:5]:
                 if isinstance(dec, dict):
-                    lines.append(f"- **{dec.get('category', 'General')}**: {dec.get('decision', '')}")
+                    lines.append(
+                        f"- **{dec.get('category', 'General')}**: {dec.get('decision', '')}"
+                    )
                 else:
                     lines.append(f"- {dec}")
 
