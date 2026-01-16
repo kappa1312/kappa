@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "kappa-os"
-version = "0.1.0"
+version = "0.1.0-beta"
 description = "Autonomous Development Operating System - 10x faster software development through parallel Claude Code orchestration"
 authors = ["Kappa Team <kappa@example.com>"]
 readme = "README.md"

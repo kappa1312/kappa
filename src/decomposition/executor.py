@@ -855,7 +855,7 @@ class DryRunExecutor:
         wave_number: int = 0,
         context: PromptContext | None = None,
     ) -> WaveExecutionResult:
-        """Simulate wave execution."""
+        """Simulate wave execution with parallel task execution."""
         import random
 
         tasks = []
@@ -863,29 +863,28 @@ class DryRunExecutor:
             if task_dict.get("id") in task_ids:
                 tasks.append(task_dict)
 
-        results = []
-        for task in tasks:
+        async def execute_single_task(task: dict[str, Any]) -> TaskExecutionResult:
+            """Execute a single task (simulated)."""
             await asyncio.sleep(self.delay_per_task)
-
             success = random.random() < self.success_rate
-
-            results.append(
-                TaskExecutionResult(
-                    task_id=task.get("id", "unknown"),
-                    success=success,
-                    output=(
-                        f"Dry run output for {task.get('title', 'unknown')}" if success else None
-                    ),
-                    error="Simulated failure" if not success else None,
-                    files_created=task.get("files_to_create", []),
-                    files_modified=task.get("files_to_modify", []),
-                    wave_number=wave_number,
-                )
+            return TaskExecutionResult(
+                task_id=task.get("id", "unknown"),
+                success=success,
+                output=(
+                    f"Dry run output for {task.get('title', 'unknown')}" if success else None
+                ),
+                error="Simulated failure" if not success else None,
+                files_created=task.get("files_to_create", []),
+                files_modified=task.get("files_to_modify", []),
+                wave_number=wave_number,
             )
+
+        # Execute all tasks in parallel using asyncio.gather
+        results = await asyncio.gather(*[execute_single_task(task) for task in tasks])
 
         return WaveExecutionResult(
             wave_number=wave_number,
-            results=results,
+            results=list(results),
         )
 
     async def execute_task(

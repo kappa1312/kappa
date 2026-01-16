@@ -65,7 +65,7 @@ class TestHealthEndpoint:
         response = client.get("/health")
         data = response.json()
         assert "version" in data
-        assert data["version"] == "0.0.6"
+        assert data["version"] == "0.1.0-beta"
 
 
 # =============================================================================

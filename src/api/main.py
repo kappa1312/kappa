@@ -41,7 +41,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Kappa OS API",
     description="Autonomous Development Operating System API",
-    version="0.0.6",
+    version="0.1.0-beta",
     lifespan=lifespan,
 )
 
@@ -92,7 +92,7 @@ async def health_check() -> dict[str, str]:
     Returns:
         Health status and version.
     """
-    return {"status": "healthy", "version": "0.0.6"}
+    return {"status": "healthy", "version": "0.1.0-beta"}
 
 
 @app.get("/api/ws-status")
@@ -124,7 +124,7 @@ async def serve_dashboard() -> FileResponse | dict[str, str]:
         return FileResponse(index_file, media_type="text/html")
     return {
         "name": "Kappa OS API",
-        "version": "0.0.6",
+        "version": "0.1.0-beta",
         "docs": "/docs",
         "health": "/health",
         "dashboard": "Not built. Run: cd src/dashboard && npm install && npm run build",

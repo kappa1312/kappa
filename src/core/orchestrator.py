@@ -546,8 +546,10 @@ class Kappa:
 
         task_ids = [t.get("id", str(uuid4())) for t in tasks]
 
-        # Ensure tasks are in state
-        state.setdefault("tasks", []).extend(tasks)
+        # Ensure tasks are in state (avoid duplicates by checking existing IDs)
+        existing_task_ids = {t.get("id") for t in state.get("tasks", [])}
+        new_tasks = [t for t in tasks if t.get("id") not in existing_task_ids]
+        state.setdefault("tasks", []).extend(new_tasks)
 
         return await executor.execute_wave(
             task_ids=task_ids,

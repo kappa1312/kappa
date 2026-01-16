@@ -392,8 +392,8 @@ class TestOrchestratorParallelExecution:
         sample_state: dict,
     ) -> None:
         """Test executing a single wave in parallel."""
-        # Use dry run executor by patching
-        with patch("src.decomposition.executor.create_executor") as mock_create:
+        # Use dry run executor by patching where it's USED (orchestrator), not defined
+        with patch("src.core.orchestrator.create_executor") as mock_create:
             mock_executor = DryRunExecutor(delay_per_task=0.01)
             mock_create.return_value = mock_executor
 

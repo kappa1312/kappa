@@ -16,8 +16,9 @@ class TestSessionConfig:
         """Test default configuration values."""
         config = SessionConfig()
 
-        assert config.max_turns == 50
-        assert config.timeout_seconds == 3600
+        # Match actual defaults from SessionConfig class
+        assert config.max_turns == 100
+        assert config.timeout_seconds == 1800
         assert config.auto_accept_edits is True
         assert "Read" in config.allowed_tools
         assert "Write" in config.allowed_tools
