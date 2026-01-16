@@ -65,7 +65,7 @@ class TestHealthEndpoint:
         response = client.get("/health")
         data = response.json()
         assert "version" in data
-        assert data["version"] == "0.0.5"
+        assert data["version"] == "0.0.6"
 
 
 # =============================================================================
@@ -81,13 +81,19 @@ class TestRootEndpoint:
         response = client.get("/")
         assert response.status_code == 200
 
-    def test_root_returns_api_info(self, client) -> None:
-        """Test root endpoint returns API info."""
+    def test_root_returns_dashboard_or_api_info(self, client) -> None:
+        """Test root endpoint returns dashboard HTML or API info."""
         response = client.get("/")
-        data = response.json()
-        assert data["name"] == "Kappa OS API"
-        assert "version" in data
-        assert "docs" in data
+        # If dashboard is built, returns HTML; otherwise returns JSON
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            # Dashboard is built and served
+            assert "<!DOCTYPE html>" in response.text or "<html" in response.text
+        else:
+            # Dashboard not built, returns JSON
+            data = response.json()
+            assert data["name"] == "Kappa OS API"
+            assert "version" in data
 
 
 # =============================================================================

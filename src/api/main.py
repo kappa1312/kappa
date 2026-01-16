@@ -8,12 +8,18 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from src.api.websocket import ws_manager
+
+# Dashboard build directory
+DASHBOARD_DIST = Path(__file__).parent.parent / "dashboard" / "dist"
 
 
 @asynccontextmanager
@@ -35,7 +41,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Kappa OS API",
     description="Autonomous Development Operating System API",
-    version="0.0.5",
+    version="0.0.6",
     lifespan=lifespan,
 )
 
@@ -86,23 +92,7 @@ async def health_check() -> dict[str, str]:
     Returns:
         Health status and version.
     """
-    return {"status": "healthy", "version": "0.0.5"}
-
-
-@app.get("/")
-async def root() -> dict[str, str]:
-    """
-    Root endpoint.
-
-    Returns:
-        Welcome message.
-    """
-    return {
-        "name": "Kappa OS API",
-        "version": "0.0.5",
-        "docs": "/docs",
-        "health": "/health",
-    }
+    return {"status": "healthy", "version": "0.0.6"}
 
 
 @app.get("/api/ws-status")
@@ -114,3 +104,76 @@ async def ws_status() -> dict[str, int]:
         Number of active connections.
     """
     return {"active_connections": ws_manager.connection_count}
+
+
+# Mount static assets if dashboard is built
+if (DASHBOARD_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=DASHBOARD_DIST / "assets"), name="assets")
+
+
+@app.get("/", response_model=None)
+async def serve_dashboard() -> FileResponse | dict[str, str]:
+    """
+    Serve the dashboard or return API info.
+
+    Returns:
+        Dashboard index.html if built, otherwise API info.
+    """
+    index_file = DASHBOARD_DIST / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file, media_type="text/html")
+    return {
+        "name": "Kappa OS API",
+        "version": "0.0.6",
+        "docs": "/docs",
+        "health": "/health",
+        "dashboard": "Not built. Run: cd src/dashboard && npm install && npm run build",
+    }
+
+
+@app.get("/{path:path}", response_model=None)
+async def serve_spa(path: str) -> FileResponse:
+    """
+    Catch-all route for SPA routing.
+
+    Args:
+        path: The requested path.
+
+    Returns:
+        The requested file or index.html for SPA routing.
+
+    Raises:
+        HTTPException: 404 if the path is an unknown API route.
+    """
+    from fastapi import HTTPException
+
+    # For API, WebSocket, and docs routes, raise 404 if they weren't matched by specific routes
+    if path.startswith(("api/", "ws", "docs", "openapi", "health", "redoc")):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Try to serve the file directly from dist
+    file_path = DASHBOARD_DIST / path
+    if file_path.exists() and file_path.is_file():
+        # Determine media type
+        suffix = file_path.suffix.lower()
+        media_types = {
+            ".js": "application/javascript",
+            ".css": "text/css",
+            ".html": "text/html",
+            ".json": "application/json",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
+        }
+        media_type = media_types.get(suffix, "application/octet-stream")
+        return FileResponse(file_path, media_type=media_type)
+
+    # Fall back to index.html for SPA routing
+    index_file = DASHBOARD_DIST / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file, media_type="text/html")
+
+    # No dashboard built
+    raise HTTPException(status_code=404, detail="Dashboard not built")

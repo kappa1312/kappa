@@ -37,6 +37,7 @@ httpx = "^0.28.0"
 fastapi = "^0.115.0"
 uvicorn = {extras = ["standard"], version = "^0.34.0"}
 websockets = "^13.0"
+python-multipart = "^0.0.21"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
