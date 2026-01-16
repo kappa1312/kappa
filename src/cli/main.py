@@ -63,13 +63,13 @@ def run(
         "-n",
         help="Project name (defaults to directory name)",
     ),
-    max_sessions: int = typer.Option(
+    _max_sessions: int = typer.Option(
         5,
         "--max-sessions",
         "-s",
         help="Maximum parallel sessions",
     ),
-    debug: bool = typer.Option(
+    _debug: bool = typer.Option(
         False,
         "--debug",
         "-d",
@@ -262,6 +262,136 @@ def health() -> None:
             console.print(f"  {name}: [{color}]{status}[/{color}] - {message}")
 
     anyio.run(do_health_check)
+
+
+@app.command()
+def chat() -> None:
+    """
+    Start interactive chat with Kappa OS.
+
+    Guides you through project ideation to development with
+    a conversational interface.
+
+    Example:
+        kappa chat
+    """
+
+    async def start() -> None:
+        from src.chat.interface import start_chat_cli
+
+        await start_chat_cli()
+
+    anyio.run(start)
+
+
+@app.command()
+def dashboard(
+    port: int = typer.Option(8000, "--port", "-p", help="Port for dashboard server"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host to bind to"),
+) -> None:
+    """
+    Start the Kappa OS dashboard server.
+
+    Provides a REST API and WebSocket interface for real-time
+    project monitoring and management.
+
+    Example:
+        kappa dashboard
+        kappa dashboard --port 3000
+    """
+    import uvicorn
+
+    from src.api.main import app as api_app
+
+    console.print(
+        Panel(
+            f"[bold]Dashboard:[/bold] http://localhost:{port}\n"
+            f"[bold]API Docs:[/bold]  http://localhost:{port}/docs\n"
+            f"[bold]Health:[/bold]    http://localhost:{port}/health",
+            title="[bold cyan]Kappa OS Dashboard[/bold cyan]",
+            border_style="cyan",
+        )
+    )
+
+    uvicorn.run(api_app, host=host, port=port, log_level="info")
+
+
+@app.command()
+def build(
+    requirements: str = typer.Argument(..., help="Requirements text or path to requirements file"),
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Output workspace directory",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        "-n",
+        help="Project name",
+    ),
+    _watch: bool = typer.Option(
+        False,
+        "--watch",
+        help="Watch progress in real-time",
+    ),
+) -> None:
+    """
+    Build a project from requirements.
+
+    Accepts either inline requirements text or a path to a requirements file.
+
+    Example:
+        kappa build "Build a REST API with authentication"
+        kappa build ./requirements.md --name my-api
+    """
+    # Check if requirements is a file path
+    req_path = Path(requirements)
+    if req_path.exists() and req_path.is_file():
+        requirements_text = req_path.read_text()
+        console.print(f"[dim]Loaded requirements from {req_path}[/dim]")
+    else:
+        requirements_text = requirements
+
+    console.print(
+        Panel(
+            f"[bold]Requirements:[/bold]\n{requirements_text[:300]}{'...' if len(requirements_text) > 300 else ''}",
+            title="[bold blue]Kappa Build[/bold blue]",
+            border_style="blue",
+        )
+    )
+
+    async def execute() -> None:
+        from src.core.orchestrator import Kappa
+
+        kappa = Kappa(workspace=str(workspace) if workspace else None)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Building project...", total=None)
+
+            result = await kappa.execute(
+                requirements=requirements_text,
+                project_name=name,
+            )
+
+            progress.update(task, completed=True)
+
+        # Display results
+        if result.get("status") == "completed":
+            console.print("\n[bold green]Build completed successfully![/bold green]")
+            console.print(f"[dim]Workspace: {result.get('workspace_path')}[/dim]")
+        else:
+            console.print(f"\n[bold red]Build failed: {result.get('error')}[/bold red]")
+
+        if result.get("final_output"):
+            console.print(f"\n[dim]Output:[/dim]\n{result.get('final_output')[:500]}")
+
+    anyio.run(execute)
 
 
 if __name__ == "__main__":
