@@ -12,9 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 
 class ConversationPhase(str, Enum):
@@ -964,33 +967,266 @@ Would you like to start a new project?"""
 # =============================================================================
 
 
+def _read_file_content(file_path: str, max_lines: int = 500) -> str:
+    """Read file content with line limit."""
+    from pathlib import Path
+
+    path = Path(file_path).expanduser().resolve()
+    if not path.exists():
+        return f"[File not found: {file_path}]"
+    if not path.is_file():
+        return f"[Not a file: {file_path}]"
+
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        if len(lines) > max_lines:
+            content = "\n".join(lines[:max_lines])
+            content += f"\n... [truncated, {len(lines) - max_lines} more lines]"
+        return content
+    except Exception as e:
+        return f"[Error reading file: {e}]"
+
+
+def _list_directory(dir_path: str, max_depth: int = 2) -> str:
+    """List directory contents with depth limit."""
+    from pathlib import Path
+
+    path = Path(dir_path).expanduser().resolve()
+    if not path.exists():
+        return f"[Directory not found: {dir_path}]"
+    if not path.is_dir():
+        return f"[Not a directory: {dir_path}]"
+
+    try:
+        result = []
+        result.append(f"Directory: {path}")
+        result.append("=" * 50)
+
+        def walk_dir(p: Path, prefix: str = "", depth: int = 0) -> None:
+            if depth > max_depth:
+                return
+            try:
+                items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+                for i, item in enumerate(items[:50]):  # Limit items per directory
+                    is_last = i == len(items) - 1 or i == 49
+                    connector = "└── " if is_last else "├── "
+                    if item.is_dir():
+                        result.append(f"{prefix}{connector}{item.name}/")
+                        if depth < max_depth:
+                            extension = "    " if is_last else "│   "
+                            walk_dir(item, prefix + extension, depth + 1)
+                    else:
+                        size = item.stat().st_size
+                        size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
+                        result.append(f"{prefix}{connector}{item.name} ({size_str})")
+                if len(items) > 50:
+                    result.append(f"{prefix}... and {len(items) - 50} more items")
+            except PermissionError:
+                result.append(f"{prefix}[Permission denied]")
+
+        walk_dir(path)
+        return "\n".join(result)
+    except Exception as e:
+        return f"[Error listing directory: {e}]"
+
+
+def _extract_file_references(text: str) -> list[tuple[str, str]]:
+    """Extract file and folder references from text.
+
+    Detects patterns like:
+    - @file:path/to/file.py
+    - @folder:path/to/dir
+    - @./relative/path
+    - @/absolute/path
+    - @~/home/path
+    """
+    import re
+    from pathlib import Path
+
+    references = []
+
+    # Pattern for explicit @file: and @folder: references
+    file_pattern = r'@file:([^\s]+)'
+    folder_pattern = r'@folder:([^\s]+)'
+
+    # Pattern for path references starting with @
+    path_pattern = r'@([./~][^\s]*)'
+
+    # Find @file: references
+    for match in re.finditer(file_pattern, text):
+        path = match.group(1)
+        references.append(("file", path))
+
+    # Find @folder: references
+    for match in re.finditer(folder_pattern, text):
+        path = match.group(1)
+        references.append(("folder", path))
+
+    # Find @path references
+    for match in re.finditer(path_pattern, text):
+        path = match.group(1)
+        # Skip if already matched by file: or folder: pattern
+        full_match = match.group(0)
+        if full_match.startswith("@file:") or full_match.startswith("@folder:"):
+            continue
+
+        expanded_path = Path(path).expanduser()
+        if expanded_path.exists():
+            if expanded_path.is_dir():
+                references.append(("folder", path))
+            else:
+                references.append(("file", path))
+        else:
+            # Try relative to current directory
+            cwd_path = Path.cwd() / path
+            if cwd_path.exists():
+                if cwd_path.is_dir():
+                    references.append(("folder", str(cwd_path)))
+                else:
+                    references.append(("file", str(cwd_path)))
+
+    return references
+
+
+def _process_file_references(text: str) -> str:
+    """Process text and inject file/folder contents."""
+    references = _extract_file_references(text)
+
+    if not references:
+        return text
+
+    # Build context from references
+    context_parts = []
+    for ref_type, ref_path in references:
+        if ref_type == "file":
+            content = _read_file_content(ref_path)
+            context_parts.append(f"\n--- File: {ref_path} ---\n```\n{content}\n```\n")
+        elif ref_type == "folder":
+            content = _list_directory(ref_path)
+            context_parts.append(f"\n--- Directory: {ref_path} ---\n```\n{content}\n```\n")
+
+    if context_parts:
+        # Clean the original text of reference markers for cleaner processing
+        import re
+        cleaned_text = re.sub(r'@file:[^\s]+', '', text)
+        cleaned_text = re.sub(r'@folder:[^\s]+', '', cleaned_text)
+        cleaned_text = re.sub(r'@([./~][^\s]*)', '', cleaned_text)
+        cleaned_text = cleaned_text.strip()
+
+        # Combine original intent with file context
+        context_section = "\n".join(context_parts)
+        return f"{cleaned_text}\n\n**Referenced Context:**{context_section}"
+
+    return text
+
+
+def _get_multiline_input(console: Console) -> str:
+    """Get multi-line input from user.
+
+    Supports:
+    - Single line input (just press Enter to submit)
+    - Multi-line mode: Start with triple backticks (```) for multi-line
+    - Escape sequences for newlines (\\n)
+    - Press Ctrl+D or empty line after content to submit multi-line
+    """
+
+    console.print("[bold green]You[/bold green] [dim](``` for multi-line, Enter to send)[/dim]")
+    console.print("[bold green]>[/bold green] ", end="")
+
+    try:
+        first_line = input()
+    except EOFError:
+        return ""
+
+    # Check if starting multi-line mode
+    if first_line.strip() == "```" or first_line.strip().startswith("```"):
+        console.print("[dim]Multi-line mode. End with ``` or Ctrl+D[/dim]")
+        lines = []
+        if first_line.strip() != "```":
+            # Has content after ```
+            lines.append(first_line[first_line.find("```") + 3:])
+
+        while True:
+            try:
+                console.print("[bold green].[/bold green] ", end="")
+                line = input()
+                if line.strip() == "```":
+                    break
+                lines.append(line)
+            except EOFError:
+                break
+
+        return "\n".join(lines)
+
+    # Single line mode - process escape sequences
+    result = first_line.replace("\\n", "\n")
+    return result
+
+
 async def start_chat_cli() -> None:
-    """Start interactive chat in terminal using Rich."""
+    """Start interactive chat in terminal using Rich.
+
+    Features:
+    - Multi-line input: Start with ``` for multi-line mode, end with ``` or Ctrl+D
+    - File references: Use @file:path/to/file or @./relative/path
+    - Folder references: Use @folder:path/to/dir or @./dir/
+    - Escape sequences: Use \\n for newlines in single-line mode
+
+    Examples:
+        You> Build a REST API @file:./requirements.txt
+        You> ```
+        . Build a CLI tool that:
+        . - Reads config from @./config.yaml
+        . - Outputs to ./dist/
+        . ```
+    """
     from rich.console import Console
     from rich.markdown import Markdown
-    from rich.prompt import Prompt
+    from rich.panel import Panel
 
     console = Console()
     chat = KappaChat()
 
-    console.print("\n[bold cyan]═══ KAPPA OS ═══[/bold cyan]")
-    console.print("[dim]Autonomous Development Operating System[/dim]\n")
+    # Print welcome banner
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]KAPPA OS[/bold cyan]\n"
+        "[dim]Autonomous Development Operating System[/dim]",
+        border_style="cyan"
+    ))
+    console.print()
     console.print("Tell me what you'd like to build!\n")
-    console.print("[dim]Type 'exit' or 'quit' to end the session.[/dim]\n")
+    console.print("[dim]Commands:[/dim]")
+    console.print("[dim]  • Type your message and press Enter to send[/dim]")
+    console.print("[dim]  • Start with ``` for multi-line input (end with ```)[/dim]")
+    console.print("[dim]  • Reference files: @file:./path or @./path[/dim]")
+    console.print("[dim]  • Reference folders: @folder:./dir or @./dir/[/dim]")
+    console.print("[dim]  • Type 'exit' or 'quit' to end[/dim]")
+    console.print()
 
     while True:
         try:
-            user_input = Prompt.ask("[bold green]You[/bold green]")
+            user_input = _get_multiline_input(console)
 
-            if user_input.lower() in ["exit", "quit", "bye", "q"]:
+            if not user_input or not user_input.strip():
+                continue
+
+            if user_input.lower().strip() in ["exit", "quit", "bye", "q"]:
                 console.print("\n[dim]Goodbye! Happy building![/dim]\n")
                 break
 
-            if not user_input.strip():
-                continue
+            # Process file/folder references
+            processed_input = _process_file_references(user_input)
 
-            response = await chat.process_message(user_input)
-            console.print("\n[bold cyan]Kappa[/bold cyan]")
+            # Show what references were found (if any)
+            refs = _extract_file_references(user_input)
+            if refs:
+                console.print(f"[dim]📎 Attached {len(refs)} reference(s)[/dim]")
+
+            response = await chat.process_message(processed_input)
+            console.print()
+            console.print("[bold cyan]Kappa[/bold cyan]")
             console.print(Markdown(response))
             console.print()
 
