@@ -63,7 +63,7 @@ class KappaChat:
     Interactive chat interface for Kappa OS.
 
     Guides users from ideation to completed project through
-    a natural conversation flow.
+    a natural conversation flow powered by Claude.
 
     Usage:
         chat = KappaChat()
@@ -74,6 +74,30 @@ class KappaChat:
         on_phase_change: Optional callback when phase changes.
         on_progress_update: Optional callback for build progress.
     """
+
+    # System prompt for Claude-powered conversation
+    SYSTEM_PROMPT = """You are Kappa OS, an autonomous development assistant that helps users build software projects.
+
+Your role is to:
+1. Understand what the user wants to build
+2. Ask clarifying questions to gather requirements
+3. Create a comprehensive project proposal
+4. Refine the proposal based on feedback
+5. Execute the build when approved
+
+Current conversation phase: {phase}
+Current gathered information: {gathered_info}
+Current proposed requirements: {proposed_requirements}
+
+Guidelines:
+- Be conversational, helpful, and professional
+- Ask focused questions to understand requirements
+- When the user wants to modify the proposal, understand their intent and apply changes
+- Support adding pages, features, integrations, changing tech stack, etc.
+- When user says "yes", "build it", "go ahead", etc., indicate readiness to build
+- Keep responses concise but informative
+
+Respond naturally to the user's message. If they want to modify the proposal, acknowledge their request and describe what changes you'll make."""
 
     def __init__(self, workspace: str | None = None) -> None:
         """
@@ -92,6 +116,25 @@ class KappaChat:
         # Lazy-loaded components
         self._kappa: Any | None = None
         self._parser: Any | None = None
+        self._claude_client: Any | None = None
+
+    @property
+    def claude_client(self) -> Any:
+        """Get or create Claude API client."""
+        if self._claude_client is None:
+            try:
+                from anthropic import AsyncAnthropic
+
+                from src.core.config import get_settings
+
+                settings = get_settings()
+                self._claude_client = AsyncAnthropic(
+                    api_key=settings.anthropic_api_key.get_secret_value()
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize Claude client: {e}")
+                self._claude_client = None
+        return self._claude_client
 
     @property
     def kappa(self) -> Any:
@@ -110,6 +153,70 @@ class KappaChat:
 
             self._parser = RequirementsParser()
         return self._parser
+
+    async def _call_claude(self, user_message: str, context: str = "") -> str:
+        """Call Claude API for intelligent conversation.
+
+        Args:
+            user_message: The user's message.
+            context: Additional context to include.
+
+        Returns:
+            Claude's response.
+        """
+        if not self.claude_client:
+            return self._fallback_response(user_message)
+
+        try:
+            # Build conversation history for context
+            messages = []
+
+            # Add recent conversation history (last 10 messages)
+            for msg in self.state.messages[-10:]:
+                messages.append({
+                    "role": "user" if msg.role == "user" else "assistant",
+                    "content": msg.content
+                })
+
+            # Add current message
+            messages.append({"role": "user", "content": user_message})
+
+            # Build system prompt with current state
+            system = self.SYSTEM_PROMPT.format(
+                phase=self.state.phase.value,
+                gathered_info=str(self.state.gathered_info),
+                proposed_requirements=(
+                    str(self.state.proposed_requirements.__dict__)
+                    if self.state.proposed_requirements
+                    else "None"
+                ),
+            )
+
+            if context:
+                system += f"\n\nAdditional context:\n{context}"
+
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                system=system,
+                messages=messages,
+            )
+
+            return response.content[0].text
+
+        except Exception as e:
+            logger.error(f"Claude API call failed: {e}")
+            return self._fallback_response(user_message)
+
+    def _fallback_response(self, user_message: str) -> str:  # noqa: ARG002
+        """Fallback response when Claude API is unavailable."""
+        return (
+            "I apologize, but I'm having trouble processing your request right now. "
+            "Please make sure your ANTHROPIC_API_KEY is set correctly.\n\n"
+            "You can try:\n"
+            "- Checking your API key: `echo $ANTHROPIC_API_KEY`\n"
+            "- Setting it: `export ANTHROPIC_API_KEY=sk-ant-...`"
+        )
 
     async def process_message(self, user_input: str) -> str:
         """
@@ -262,33 +369,31 @@ You can:
         return await self._handle_refinement(user_input)
 
     async def _handle_refinement(self, user_input: str) -> str:
-        """Handle user refinements to the proposal."""
+        """Handle user refinements to the proposal using Claude."""
         lower_input = user_input.lower()
 
-        # Check for approval
-        approval_words = [
-            "yes",
-            "build",
-            "proceed",
-            "start",
-            "go",
-            "looks good",
-            "perfect",
-            "great",
-            "ok",
-            "okay",
-            "confirm",
+        # Check for clear approval signals
+        approval_phrases = [
+            "yes", "build it", "build", "proceed", "start building",
+            "go ahead", "looks good", "perfect", "great", "let's go",
+            "ok build", "okay build", "confirm", "approved", "ship it"
         ]
-        if any(word in lower_input for word in approval_words):
+
+        # Only trigger build on clear approval, not just "ok" or "yes" in a sentence
+        words = lower_input.split()
+        is_approval = (
+            any(phrase in lower_input for phrase in approval_phrases)
+            and len(words) <= 5  # Short confirmations only
+            and not any(w in lower_input for w in ["add", "remove", "change", "modify", "but"])
+        )
+
+        if is_approval:
             return await self._start_execution()
 
-        # Otherwise, handle modification
-        modifications = await self._extract_modifications(user_input)
+        # Use Claude to understand and process the modification request
+        modifications = await self._extract_modifications_with_claude(user_input)
 
         if modifications:
-            # Apply modifications
-            self._apply_modifications(modifications)
-
             # Show updated proposal
             updated_proposal = await self._generate_proposal()
             return f"""Got it! I've updated the proposal:
@@ -298,28 +403,40 @@ You can:
 
 {updated_proposal}"""
         else:
-            return """I'm not sure what changes you'd like. Could you be more specific?
+            # Let Claude handle the conversation naturally
+            context = f"""The user is asking about or trying to modify the project proposal.
+Current proposal:
+- Name: {self.state.proposed_requirements.name if self.state.proposed_requirements else 'Unknown'}
+- Pages: {self.state.proposed_requirements.pages if self.state.proposed_requirements else []}
+- Features: {self.state.proposed_requirements.features if self.state.proposed_requirements else []}
+- Tech Stack: {self.state.proposed_requirements.tech_stack if self.state.proposed_requirements else {}}
 
-For example:
-- "Add a blog section"
-- "Remove the contact form"
-- "Change the styling to Bootstrap"
-- "Use PostgreSQL instead of MongoDB"
+Help the user modify the proposal or clarify what they want."""
 
-Or if you're happy with the proposal, just say **"build it"**!"""
+            return await self._call_claude(user_input, context)
 
     async def _handle_confirmation(self, user_input: str) -> str:
-        """Handle final confirmation before building."""
+        """Handle final confirmation before building using Claude for understanding."""
         lower_input = user_input.lower()
+        words = lower_input.split()
 
-        approval_words = ["yes", "build", "proceed", "start", "go", "confirm", "ok", "okay"]
-        if any(word in lower_input for word in approval_words):
+        # Clear approval signals (short responses)
+        approval_words = ["yes", "build", "proceed", "start", "go", "confirm", "ok", "okay", "ship"]
+        is_approval = (
+            any(word in lower_input for word in approval_words)
+            and len(words) <= 5
+            and not any(w in lower_input for w in ["add", "remove", "change", "modify", "but", "wait"])
+        )
+
+        if is_approval:
             return await self._start_execution()
-        elif any(
-            word in lower_input for word in ["no", "wait", "change", "modify", "add", "remove"]
-        ):
+
+        # Check for modification intent
+        modification_words = ["no", "wait", "change", "modify", "add", "remove", "update", "instead"]
+        if any(word in lower_input for word in modification_words):
             self._set_phase(ConversationPhase.REFINEMENT)
-            return "No problem! What would you like to change?"
+            # Process the modification directly
+            return await self._handle_refinement(user_input)
         else:
             return """Just to confirm - would you like me to start building the project?
 
@@ -785,74 +902,140 @@ Design:
             integrations=info.get("integrations", []),
         )
 
-    async def _extract_modifications(self, text: str) -> list[str]:
-        """Extract modifications from user request."""
+    async def _extract_modifications_with_claude(self, text: str) -> list[str]:
+        """Use Claude to understand and extract modifications from user request."""
+        import json
+
+        if not self.claude_client or not self.state.proposed_requirements:
+            # Fallback to basic extraction
+            return await self._extract_modifications_basic(text)
+
+        try:
+            req = self.state.proposed_requirements
+            prompt = f"""Analyze this user request and extract the modifications they want to make to the project proposal.
+
+Current proposal:
+- Name: {req.name}
+- Pages: {req.pages}
+- Features: {req.features}
+- Tech Stack: {req.tech_stack}
+- Integrations: {req.integrations}
+
+User request: "{text}"
+
+Return a JSON object with these fields:
+{{
+    "understood": true/false,  // whether you understood the request
+    "modifications": [
+        {{
+            "action": "add" | "remove" | "change",
+            "type": "page" | "feature" | "tech_stack" | "integration",
+            "item": "the item to add/remove",
+            "value": "new value for changes (optional)"
+        }}
+    ],
+    "summary": ["list of human-readable changes made"]
+}}
+
+Examples:
+- "add our work page" -> {{"understood": true, "modifications": [{{"action": "add", "type": "page", "item": "Our Work"}}], "summary": ["Added page: Our Work"]}}
+- "add services and portfolio pages" -> two modifications for each page
+- "use Sanity CMS" -> {{"action": "change", "type": "tech_stack", "item": "cms", "value": "Sanity"}}
+
+Return ONLY valid JSON."""
+
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Handle markdown code blocks
+            if response_text.startswith("```"):
+                import re
+                response_text = re.sub(r"```(?:json)?\n?", "", response_text)
+                response_text = response_text.rstrip("`").strip()
+
+            parsed = json.loads(response_text)
+
+            if not parsed.get("understood", False):
+                return []
+
+            # Apply the modifications
+            modifications = parsed.get("modifications", [])
+            for mod in modifications:
+                action = mod.get("action")
+                mod_type = mod.get("type")
+                item = mod.get("item")
+                value = mod.get("value")
+
+                if action == "add":
+                    if mod_type == "page" and item not in req.pages:
+                        req.pages.append(item)
+                    elif mod_type == "feature" and item not in req.features:
+                        req.features.append(item)
+                    elif mod_type == "integration" and item not in req.integrations:
+                        req.integrations.append(item)
+                elif action == "remove":
+                    if mod_type == "page" and item in req.pages:
+                        req.pages.remove(item)
+                    elif mod_type == "feature" and item in req.features:
+                        req.features.remove(item)
+                    elif mod_type == "integration" and item in req.integrations:
+                        req.integrations.remove(item)
+                elif action == "change" and mod_type == "tech_stack" and item and value:
+                    req.tech_stack[item] = value
+
+            return parsed.get("summary", [])
+
+        except Exception as e:
+            logger.warning(f"Claude modification extraction failed: {e}")
+            return await self._extract_modifications_basic(text)
+
+    async def _extract_modifications_basic(self, text: str) -> list[str]:
+        """Basic keyword-based modification extraction (fallback)."""
         modifications = []
         lower = text.lower()
+        req = self.state.proposed_requirements
 
-        # Handle add requests
-        if "add" in lower and "blog" in lower:
-            modifications.append("Added: Blog section")
-            if (
-                self.state.proposed_requirements
-                and "Blog" not in self.state.proposed_requirements.pages
-            ):
-                self.state.proposed_requirements.pages.append("Blog")
-        if "add" in lower and "contact" in lower and "form" in lower:
-            modifications.append("Added: Contact form")
-            if (
-                self.state.proposed_requirements
-                and "Contact form" not in self.state.proposed_requirements.features
-            ):
-                self.state.proposed_requirements.features.append("Contact form")
-        if "add" in lower and ("authentication" in lower or "login" in lower):
-            modifications.append("Added: Authentication")
-            if (
-                self.state.proposed_requirements
-                and "Authentication" not in self.state.proposed_requirements.features
-            ):
-                self.state.proposed_requirements.features.append("Authentication")
-        if "add" in lower and "dark mode" in lower:
-            modifications.append("Added: Dark mode")
-            if (
-                self.state.proposed_requirements
-                and "Dark mode" not in self.state.proposed_requirements.features
-            ):
-                self.state.proposed_requirements.features.append("Dark mode")
+        if not req:
+            return []
 
-        # Handle remove requests
-        remove_keywords = "remove" in lower or "don't need" in lower or "no need" in lower
-        if remove_keywords and "blog" in lower:
-            modifications.append("Removed: Blog section")
-            if (
-                self.state.proposed_requirements
-                and "Blog" in self.state.proposed_requirements.pages
-            ):
-                self.state.proposed_requirements.pages.remove("Blog")
-        if remove_keywords and "contact" in lower:
-            modifications.append("Removed: Contact")
-            if (
-                self.state.proposed_requirements
-                and "Contact" in self.state.proposed_requirements.pages
-            ):
-                self.state.proposed_requirements.pages.remove("Contact")
+        # Detect "add page X" patterns
+        import re
+        add_page_match = re.findall(r"add\s+(?:page[s]?\s+)?([a-zA-Z\s,]+?)(?:\s+page)?(?:$|,|\.|and)", lower)
+        for match in add_page_match:
+            pages = [p.strip().title() for p in re.split(r"[,\s]+and\s+|,\s*", match) if p.strip()]
+            for page in pages:
+                if page and page not in req.pages and len(page) > 1:
+                    req.pages.append(page)
+                    modifications.append(f"Added page: {page}")
 
-        # Handle change requests
-        change_keywords = "change" in lower or "use" in lower
-        if change_keywords and "bootstrap" in lower:
-            modifications.append("Changed styling to: Bootstrap")
-            if self.state.proposed_requirements:
-                self.state.proposed_requirements.tech_stack["styling"] = "Bootstrap"
-        if change_keywords and "react" in lower and "next" not in lower:
-            modifications.append("Changed framework to: React")
-            if self.state.proposed_requirements:
-                self.state.proposed_requirements.tech_stack["framework"] = "React"
-        if change_keywords and "vue" in lower:
-            modifications.append("Changed framework to: Vue.js")
-            if self.state.proposed_requirements:
-                self.state.proposed_requirements.tech_stack["framework"] = "Vue.js"
+        # Detect "add feature X" patterns
+        add_feature_match = re.findall(r"add\s+(?:feature[s]?\s+)?([a-zA-Z\s,]+?)(?:\s+feature)?(?:$|,|\.|and)", lower)
+        for match in add_feature_match:
+            features = [f.strip().title() for f in re.split(r"[,\s]+and\s+|,\s*", match) if f.strip()]
+            for feature in features:
+                if feature and feature not in req.features and len(feature) > 1:
+                    req.features.append(feature)
+                    modifications.append(f"Added feature: {feature}")
+
+        # Detect CMS changes
+        cms_patterns = ["sanity", "contentful", "strapi", "wordpress", "prismic"]
+        for cms in cms_patterns:
+            if cms in lower and ("use" in lower or "cms" in lower or "add" in lower):
+                cms_name = cms.title()
+                req.tech_stack["cms"] = cms_name
+                modifications.append(f"Set CMS to: {cms_name}")
+                break
 
         return modifications
+
+    async def _extract_modifications(self, text: str) -> list[str]:
+        """Extract modifications - delegates to Claude-powered version."""
+        return await self._extract_modifications_with_claude(text)
 
     def _apply_modifications(self, modifications: list[str]) -> None:
         """Apply modifications to requirements."""
