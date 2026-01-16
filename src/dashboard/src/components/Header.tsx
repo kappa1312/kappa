@@ -71,7 +71,7 @@ export function Header({ isConnected }: HeaderProps) {
           <div className="text-xs text-gray-400">{formatDate(currentTime)}</div>
         </div>
         <div className="px-3 py-1 rounded-full bg-neon-purple/20 border border-neon-purple/30">
-          <span className="text-xs font-mono text-neon-purple">v0.0.6</span>
+          <span className="text-xs font-mono text-neon-purple">v0.1.0-beta</span>
         </div>
       </div>
     </header>
