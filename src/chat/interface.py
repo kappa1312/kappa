@@ -1121,43 +1121,107 @@ def _process_file_references(text: str) -> str:
     return text
 
 
+def _has_pending_input(timeout: float = 0.05) -> bool:
+    """Check if there's pending input (indicates paste operation)."""
+    import select
+    import sys
+
+    try:
+        # Use select to check if stdin has data available
+        readable, _, _ = select.select([sys.stdin], [], [], timeout)
+        return bool(readable)
+    except (ValueError, OSError):
+        # select doesn't work on Windows or some edge cases
+        return False
+
+
+def _collect_pasted_content(first_line: str, timeout: float = 0.1) -> str:
+    """Collect all pasted content by detecting rapid consecutive inputs."""
+    import sys
+
+    lines = [first_line]
+
+    # Keep reading while there's pending input (paste detection)
+    while _has_pending_input(timeout):
+        try:
+            line = sys.stdin.readline()
+            if line:
+                lines.append(line.rstrip('\n'))
+            else:
+                break
+        except Exception:
+            break
+
+    return "\n".join(lines)
+
+
 def _get_multiline_input(console: Console) -> str:
-    """Get multi-line input from user.
+    """Get multi-line input from user with paste support.
 
     Supports:
-    - Single line input (just press Enter to submit)
-    - Multi-line mode: Start with triple backticks (```) for multi-line
-    - Escape sequences for newlines (\\n)
-    - Press Ctrl+D or empty line after content to submit multi-line
-    """
+    - Single line input: Type and press Enter
+    - Multi-line paste: Just paste - auto-detected and collected
+    - Explicit multi-line: Start with ``` and end with ```
+    - Two empty lines to submit in explicit mode
 
-    console.print("[bold green]You[/bold green] [dim](``` for multi-line, Enter to send)[/dim]")
+    Paste detection works by checking if more input arrives immediately
+    after the first line (within 100ms), indicating a paste operation.
+    """
+    import sys
+
+    console.print("[bold green]You[/bold green] [dim](paste multi-line or use ``` mode)[/dim]")
     console.print("[bold green]>[/bold green] ", end="")
+    sys.stdout.flush()
 
     try:
         first_line = input()
     except EOFError:
         return ""
 
-    # Check if starting multi-line mode
+    # Check for explicit multi-line mode with ```
     if first_line.strip() == "```" or first_line.strip().startswith("```"):
-        console.print("[dim]Multi-line mode. End with ``` or Ctrl+D[/dim]")
+        console.print("[dim]Multi-line mode. End with ``` or two empty lines.[/dim]")
         lines = []
         if first_line.strip() != "```":
             # Has content after ```
             lines.append(first_line[first_line.find("```") + 3:])
 
+        empty_count = 0
         while True:
             try:
                 console.print("[bold green].[/bold green] ", end="")
+                sys.stdout.flush()
                 line = input()
+
+                # End on closing ```
                 if line.strip() == "```":
                     break
+
+                # End on two consecutive empty lines
+                if not line.strip():
+                    empty_count += 1
+                    if empty_count >= 2:
+                        # Remove the trailing empty line we added
+                        if lines and not lines[-1].strip():
+                            lines.pop()
+                        break
+                else:
+                    empty_count = 0
+
                 lines.append(line)
             except EOFError:
                 break
 
         return "\n".join(lines)
+
+    # Check for pasted content (auto-detect multi-line paste)
+    if _has_pending_input(0.1):
+        # More input is immediately available - this is a paste
+        console.print("[dim]Detecting pasted content...[/dim]")
+        full_content = _collect_pasted_content(first_line, 0.15)
+        line_count = full_content.count('\n') + 1
+        console.print(f"[dim]Collected {line_count} lines[/dim]")
+        return full_content
 
     # Single line mode - process escape sequences
     result = first_line.replace("\\n", "\n")
@@ -1197,12 +1261,13 @@ async def start_chat_cli() -> None:
     ))
     console.print()
     console.print("Tell me what you'd like to build!\n")
-    console.print("[dim]Commands:[/dim]")
-    console.print("[dim]  • Type your message and press Enter to send[/dim]")
-    console.print("[dim]  • Start with ``` for multi-line input (end with ```)[/dim]")
-    console.print("[dim]  • Reference files: @file:./path or @./path[/dim]")
-    console.print("[dim]  • Reference folders: @folder:./dir or @./dir/[/dim]")
-    console.print("[dim]  • Type 'exit' or 'quit' to end[/dim]")
+    console.print("[dim]Input modes:[/dim]")
+    console.print("[dim]  • Single line: Type and press Enter[/dim]")
+    console.print("[dim]  • Paste: Just paste multi-line text (auto-detected)[/dim]")
+    console.print("[dim]  • Manual multi-line: Start with ``` and end with ``` or two empty lines[/dim]")
+    console.print("[dim]  • File refs: @./path or @file:./path[/dim]")
+    console.print("[dim]  • Folder refs: @./dir/ or @folder:./dir[/dim]")
+    console.print("[dim]  • Exit: type 'exit' or 'quit'[/dim]")
     console.print()
 
     while True:
