@@ -4,8 +4,12 @@ This module generates atomic, executable TaskSpec objects from
 ProjectRequirements. It supports project-type aware generation
 with appropriate task structures for websites, APIs, dashboards,
 CLI tools, and libraries.
+
+Now with Claude AI-powered task generation for intelligent decomposition.
 """
 
+import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -101,9 +105,34 @@ class TaskGenerator:
         ],
     }
 
-    def __init__(self) -> None:
-        """Initialize the task generator."""
+    def __init__(self, use_ai: bool = True) -> None:
+        """Initialize the task generator.
+
+        Args:
+            use_ai: Whether to use Claude AI for intelligent task generation.
+                   Falls back to keyword-based generation if False or API unavailable.
+        """
         self._task_counter = 0
+        self._use_ai = use_ai
+        self._claude_client: Any = None
+
+    @property
+    def claude_client(self) -> Any:
+        """Lazily initialize Claude client."""
+        if self._claude_client is None:
+            try:
+                from anthropic import AsyncAnthropic
+
+                from src.core.config import get_settings
+
+                settings = get_settings()
+                self._claude_client = AsyncAnthropic(
+                    api_key=settings.anthropic_api_key.get_secret_value()
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize Claude client: {e}")
+                self._claude_client = None
+        return self._claude_client
 
     def _generate_task_id(self, prefix: str = "task") -> str:
         """Generate a unique task ID."""
@@ -117,6 +146,9 @@ class TaskGenerator:
     ) -> list[TaskSpec]:
         """
         Generate tasks from project requirements.
+
+        Uses Claude AI for intelligent task generation when available,
+        with fallback to rule-based generation.
 
         Args:
             requirements: ProjectRequirements object or specification string.
@@ -150,7 +182,23 @@ class TaskGenerator:
         )
 
         self._task_counter = 0
-        tasks: list[TaskSpec] = []
+
+        # Try AI-powered generation first if enabled
+        if self._use_ai and self.claude_client:
+            try:
+                tasks = await self._generate_tasks_with_ai(requirements)
+                if tasks:
+                    logger.info(
+                        f"AI generated {len(tasks)} tasks across "
+                        f"{max(t.wave_number or 0 for t in tasks) + 1} waves"
+                    )
+                    return tasks
+            except Exception as e:
+                logger.warning(f"AI task generation failed: {e}, using rule-based fallback")
+
+        # Rule-based generation (fallback)
+        logger.info("Using rule-based task generation")
+        tasks = []
 
         # Generate based on project type
         if requirements.project_type == ProjectType.API:
@@ -173,6 +221,150 @@ class TaskGenerator:
             f"Generated {len(tasks)} tasks across "
             f"{max(t.wave_number or 0 for t in tasks) + 1} waves"
         )
+        return tasks
+
+    async def _generate_tasks_with_ai(
+        self,
+        requirements: ProjectRequirements,
+    ) -> list[TaskSpec]:
+        """
+        Use Claude AI to generate an intelligent task breakdown.
+
+        This is the primary task generation method that leverages Claude
+        to understand project requirements and generate appropriate tasks.
+
+        Args:
+            requirements: Project requirements to analyze.
+
+        Returns:
+            List of AI-generated TaskSpec objects.
+        """
+        prompt = f"""You are a senior software architect. Analyze these project requirements and generate a detailed task breakdown for development.
+
+PROJECT REQUIREMENTS:
+- Name: {requirements.name}
+- Type: {requirements.project_type.value}
+- Description: {requirements.description}
+- Tech Stack: {json.dumps(requirements.tech_stack)}
+- Features: {json.dumps(requirements.features)}
+- Pages: {json.dumps(requirements.pages) if requirements.pages else '[]'}
+- Integrations: {json.dumps(requirements.integrations) if requirements.integrations else '[]'}
+- Constraints: {json.dumps(requirements.constraints) if requirements.constraints else '[]'}
+
+Generate a JSON array of development tasks. Each task should be an atomic, executable unit of work.
+
+TASK STRUCTURE:
+{{
+    "title": "Short task title",
+    "description": "Detailed description of what this task accomplishes",
+    "category": "one of: setup, infrastructure, data_model, business_logic, api, ui, testing, documentation, deployment, integration, types",
+    "complexity": "one of: low, medium, high",
+    "wave": 0-6 (execution order, tasks in same wave can run in parallel),
+    "dependencies": ["task titles this depends on"],
+    "files_to_create": ["list of files this task will create"],
+    "validation_commands": ["commands to verify task completion"],
+    "tags": ["relevant", "tags"]
+}}
+
+WAVE GUIDELINES:
+- Wave 0: Project setup, configuration, initial structure
+- Wave 1: Types, schemas, database models
+- Wave 2: Core services, business logic
+- Wave 3: API routes, endpoints, middleware
+- Wave 4: UI components (for frontend projects)
+- Wave 5: Integration, third-party services
+- Wave 6: Testing, documentation
+
+REQUIREMENTS:
+1. Generate 8-20 tasks covering the full development lifecycle
+2. Tasks should be atomic and independently executable
+3. Respect dependencies (a task can only depend on tasks from earlier waves)
+4. Include setup, core implementation, and testing tasks
+5. Be specific about files to create based on the tech stack
+6. Include appropriate validation commands
+
+Return ONLY a valid JSON array of task objects. No explanation or markdown."""
+
+        response = await self.claude_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Handle markdown code blocks
+        if response_text.startswith("```"):
+            response_text = re.sub(r"```(?:json)?\n?", "", response_text)
+            response_text = response_text.rstrip("`").strip()
+
+        raw_tasks = json.loads(response_text)
+        logger.info(f"AI generated {len(raw_tasks)} raw tasks")
+
+        # Convert to TaskSpec objects
+        tasks: list[TaskSpec] = []
+        task_id_map: dict[str, str] = {}  # Map task titles to IDs
+
+        # First pass: create IDs for all tasks
+        for raw_task in raw_tasks:
+            task_id = self._generate_task_id(raw_task.get("category", "task")[:4])
+            task_id_map[raw_task["title"]] = task_id
+
+        # Second pass: create TaskSpec objects with resolved dependencies
+        for raw_task in raw_tasks:
+            task_id = task_id_map[raw_task["title"]]
+
+            # Resolve dependencies from titles to IDs
+            deps = []
+            for dep_title in raw_task.get("dependencies", []):
+                if dep_title in task_id_map:
+                    deps.append(task_id_map[dep_title])
+
+            # Map category string to enum
+            category_map = {
+                "setup": TaskCategory.SETUP,
+                "infrastructure": TaskCategory.INFRASTRUCTURE,
+                "data_model": TaskCategory.DATA_MODEL,
+                "business_logic": TaskCategory.BUSINESS_LOGIC,
+                "api": TaskCategory.API,
+                "ui": TaskCategory.UI,
+                "testing": TaskCategory.TESTING,
+                "documentation": TaskCategory.DOCUMENTATION,
+                "deployment": TaskCategory.DEPLOYMENT,
+                "integration": TaskCategory.INTEGRATION,
+                "types": TaskCategory.TYPES,
+            }
+            category = category_map.get(
+                raw_task.get("category", "business_logic").lower(),
+                TaskCategory.BUSINESS_LOGIC,
+            )
+
+            # Map complexity string to enum
+            complexity_map = {
+                "low": Complexity.LOW,
+                "medium": Complexity.MEDIUM,
+                "high": Complexity.HIGH,
+            }
+            complexity = complexity_map.get(
+                raw_task.get("complexity", "medium").lower(),
+                Complexity.MEDIUM,
+            )
+
+            task = TaskSpec(
+                id=task_id,
+                title=raw_task["title"],
+                description=raw_task.get("description", ""),
+                session_type=SessionType.TERMINAL,
+                category=category,
+                complexity=complexity,
+                dependencies=deps,
+                wave_number=raw_task.get("wave", 0),
+                files_to_create=raw_task.get("files_to_create", []),
+                validation_commands=raw_task.get("validation_commands", []),
+                tags=raw_task.get("tags", []),
+            )
+            tasks.append(task)
+
         return tasks
 
     # =========================================================================
@@ -1271,11 +1463,135 @@ class TaskGenerator:
         return [task]
 
     # =========================================================================
-    # EXTRACTION HELPERS
+    # AI-POWERED EXTRACTION METHODS
     # =========================================================================
 
-    def _extract_entities(self, requirements: ProjectRequirements) -> list[str]:
-        """Extract entity names from requirements."""
+    async def _extract_entities_with_ai(self, requirements: ProjectRequirements) -> list[str]:
+        """Use Claude AI to extract domain entities from requirements.
+
+        Args:
+            requirements: Project requirements to analyze.
+
+        Returns:
+            List of entity names identified by Claude.
+        """
+        if not self.claude_client:
+            logger.warning("Claude client not available, using keyword extraction")
+            return self._extract_entities_keywords(requirements)
+
+        prompt = f"""Analyze this project and identify the main domain entities that need data models.
+
+Project: {requirements.name}
+Type: {requirements.project_type.value}
+Description: {requirements.description}
+Features: {', '.join(requirements.features)}
+Pages: {', '.join(requirements.pages) if requirements.pages else 'Not specified'}
+
+Identify domain entities that will need:
+- Database models/tables
+- CRUD operations
+- API endpoints
+
+Return ONLY a JSON array of entity names in singular PascalCase form:
+["User", "Product", "Order", ...]
+
+Guidelines:
+- Only include entities that need significant code (models, services, routes)
+- Use singular form (User not Users)
+- Use PascalCase (ProductCategory not product_category)
+- Limit to 3-8 most important entities
+
+Return ONLY the JSON array, no explanation."""
+
+        try:
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Handle markdown code blocks
+            if response_text.startswith("```"):
+                response_text = re.sub(r"```(?:json)?\n?", "", response_text)
+                response_text = response_text.rstrip("`").strip()
+
+            entities = json.loads(response_text)
+            logger.info(f"AI extracted entities: {entities}")
+            return entities
+
+        except Exception as e:
+            logger.warning(f"AI entity extraction failed: {e}, using keyword fallback")
+            return self._extract_entities_keywords(requirements)
+
+    async def _extract_components_with_ai(self, requirements: ProjectRequirements) -> list[str]:
+        """Use Claude AI to identify UI components needed for the project.
+
+        Args:
+            requirements: Project requirements to analyze.
+
+        Returns:
+            List of component names identified by Claude.
+        """
+        if not self.claude_client:
+            logger.warning("Claude client not available, using keyword extraction")
+            return self._extract_components_keywords(requirements)
+
+        prompt = f"""Analyze this project and identify the UI components needed.
+
+Project: {requirements.name}
+Type: {requirements.project_type.value}
+Description: {requirements.description}
+Features: {', '.join(requirements.features)}
+Pages: {', '.join(requirements.pages) if requirements.pages else 'Not specified'}
+Tech Stack: {requirements.tech_stack}
+
+Identify reusable UI components this project will need, such as:
+- Form components (LoginForm, SearchBar, etc.)
+- Display components (Card, DataTable, etc.)
+- Navigation (Navbar, Sidebar, etc.)
+- Interactive (Modal, Dropdown, etc.)
+
+Return ONLY a JSON array of component names in PascalCase:
+["LoginForm", "ProductCard", "SearchBar", ...]
+
+Guidelines:
+- Only include reusable components (not pages)
+- Use PascalCase naming
+- Limit to 5-12 most important components
+- Focus on components specific to this project's features
+
+Return ONLY the JSON array, no explanation."""
+
+        try:
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Handle markdown code blocks
+            if response_text.startswith("```"):
+                response_text = re.sub(r"```(?:json)?\n?", "", response_text)
+                response_text = response_text.rstrip("`").strip()
+
+            components = json.loads(response_text)
+            logger.info(f"AI extracted components: {components}")
+            return components
+
+        except Exception as e:
+            logger.warning(f"AI component extraction failed: {e}, using keyword fallback")
+            return self._extract_components_keywords(requirements)
+
+    # =========================================================================
+    # KEYWORD-BASED EXTRACTION (FALLBACK)
+    # =========================================================================
+
+    def _extract_entities_keywords(self, requirements: ProjectRequirements) -> list[str]:
+        """Extract entity names using keyword matching (fallback method)."""
         entities: set[str] = set()
 
         # Common entity patterns to look for
@@ -1304,8 +1620,8 @@ class TaskGenerator:
 
         return sorted(entities)
 
-    def _extract_components(self, requirements: ProjectRequirements) -> list[str]:
-        """Extract UI component names from requirements."""
+    def _extract_components_keywords(self, requirements: ProjectRequirements) -> list[str]:
+        """Extract UI component names using keyword matching (fallback method)."""
         components: set[str] = set()
 
         # Map features to components
@@ -1335,6 +1651,20 @@ class TaskGenerator:
             components = {"Button", "Card", "Input"}
 
         return sorted(components)
+
+    def _extract_entities(self, requirements: ProjectRequirements) -> list[str]:
+        """Extract entity names - wrapper that uses keyword method synchronously.
+
+        For async AI extraction, use _extract_entities_with_ai directly.
+        """
+        return self._extract_entities_keywords(requirements)
+
+    def _extract_components(self, requirements: ProjectRequirements) -> list[str]:
+        """Extract UI component names - wrapper that uses keyword method synchronously.
+
+        For async AI extraction, use _extract_components_with_ai directly.
+        """
+        return self._extract_components_keywords(requirements)
 
     def _capitalize_page(self, page: str) -> str:
         """Capitalize page name properly."""

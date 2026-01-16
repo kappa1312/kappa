@@ -144,6 +144,11 @@ class ProjectRequirements(BaseModel):
         description="Overall priority level",
     )
 
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata about parsing/generation",
+    )
+
     @field_validator("tech_stack")
     @classmethod
     def validate_tech_stack(cls, v: dict[str, str]) -> dict[str, str]:

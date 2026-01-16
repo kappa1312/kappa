@@ -443,82 +443,499 @@ Help the user modify the proposal or clarify what they want."""
 Say **"yes"** to begin, or tell me what you'd like to change."""
 
     async def _start_execution(self) -> str:
-        """Start the project execution."""
+        """Start project execution with real Claude Code sessions."""
         self._set_phase(ConversationPhase.EXECUTION)
         self.state.is_building = True
 
-        response = """**Starting development!**
+        # Use Claude to create an execution plan
+        if not self.claude_client:
+            return self._fallback_response("build")
 
-I'm now building your project. You can watch the progress in the dashboard.
+        req = self.state.proposed_requirements
+        if not req:
+            return "No project proposal found. Please describe what you want to build first."
 
-**What's happening:**
-1. Analyzing requirements and creating tasks
-2. Organizing tasks into execution waves
-3. Spawning parallel Claude Code sessions
-4. Building components simultaneously
-5. Merging outputs and resolving conflicts
-6. Validating the final build
+        # Get workspace from gathered info or use default
+        workspace = self.state.gathered_info.get(
+            "workspace",
+            self.workspace or f"/tmp/kappa-projects/{req.name}"
+        )
 
-I'll let you know when it's ready!
+        try:
+            # Use Claude to analyze and create execution tasks
+            execution_plan = await self._create_execution_plan_with_claude(req, workspace)
+
+            # Start execution with visibility
+            response = f"""**Starting development of {req.name}!**
+
+**Workspace:** `{workspace}`
+
+**Execution Plan:**
+{execution_plan['summary']}
+
+**Tasks to execute:**
+{self._format_tasks(execution_plan['tasks'])}
 
 ---
 
-*You can ask me questions while I'm building, like:*
-- "What's the current progress?"
-- "How many tasks are left?"
-- "Any issues so far?"
+I'm now spawning Claude Code sessions to build your project.
+You'll see real-time progress below. This may take several minutes.
+
 """
+            # Store execution context
+            self.state.gathered_info['workspace'] = workspace
+            self.state.gathered_info['execution_plan'] = execution_plan
 
-        # Start execution in background
-        asyncio.create_task(self._execute_project())
+            # Execute in foreground with streaming output
+            result = await self._execute_with_claude_code(execution_plan, workspace)
 
-        return response
-
-    async def _execute_project(self) -> None:
-        """Execute the project build (runs in background)."""
-        try:
-            # Convert requirements to text format for Kappa
-            requirements_text = self._requirements_to_text()
-
-            project_name = (
-                self.state.proposed_requirements.name
-                if self.state.proposed_requirements
-                else self.state.project_name or "kappa-project"
-            )
-
-            # Execute through Kappa
-            result = await self.kappa.execute(
-                requirements=requirements_text,
-                project_name=project_name,
-            )
-
-            self.state.project_id = result.get("project_id")
             self.state.build_result = result
             self.state.is_building = False
             self.state.build_complete = True
+            self._set_phase(ConversationPhase.COMPLETION)
 
-            if result["status"] == "completed":
-                self._set_phase(ConversationPhase.COMPLETION)
-                self._add_message(
-                    "system",
-                    f"Project completed successfully! Workspace: {result.get('workspace_path')}",
-                )
+            if result.get("status") == "completed":
+                response += f"""
+
+**Build Complete!**
+
+Your project has been created at: `{workspace}`
+
+**Files created:**
+{self._format_list(result.get('files_created', ['Check workspace for files']))}
+
+**Next steps:**
+- `cd {workspace}` to enter the project
+- Review the generated code
+- Run tests if applicable
+- Deploy when ready
+
+Would you like me to explain any part of the generated code?"""
             else:
-                self._add_message(
-                    "system",
-                    f"Project completed with status: {result['status']}",
-                )
+                response += f"""
 
-            # Trigger callback if set
-            if self.on_progress_update:
-                self.on_progress_update(result)
+**Build finished with status:** {result.get('status', 'unknown')}
+
+{result.get('message', 'Check the workspace for details.')}
+
+Would you like to try again or modify the requirements?"""
+
+            return response
 
         except Exception as e:
             logger.error(f"Execution failed: {e}")
             self.state.is_building = False
             self.state.build_complete = True
             self.state.build_result = {"status": "failed", "error": str(e)}
-            self._add_message("system", f"Build failed: {str(e)}")
+            return f"""**Build failed**
+
+Error: {str(e)}
+
+This might be due to:
+- Missing ANTHROPIC_API_KEY
+- Network issues
+- Invalid project configuration
+
+Would you like to try again?"""
+
+    async def _create_execution_plan_with_claude(
+        self, req: Any, workspace: str
+    ) -> dict[str, Any]:
+        """Use Claude to create a detailed execution plan."""
+        import json
+
+        prompt = f"""Create an execution plan for building this project.
+
+Project: {req.name}
+Description: {req.description}
+Pages: {req.pages}
+Features: {req.features}
+Tech Stack: {req.tech_stack}
+Workspace: {workspace}
+
+Return a JSON object with:
+{{
+    "summary": "Brief description of the build plan",
+    "tasks": [
+        {{
+            "id": "task-1",
+            "name": "Task name",
+            "description": "What this task does",
+            "prompt": "Detailed prompt for Claude Code to execute this task",
+            "dependencies": [],  // IDs of tasks that must complete first
+            "estimated_files": ["list of files this will create/modify"]
+        }}
+    ],
+    "total_estimated_files": 10,
+    "build_command": "npm run build or equivalent"
+}}
+
+Create 3-8 focused tasks that cover:
+1. Project setup (package.json, configs)
+2. Core implementation (main pages/features)
+3. Styling and UI
+4. Final integration
+
+Each task's "prompt" should be a complete instruction for Claude Code to execute independently.
+
+Return ONLY valid JSON."""
+
+        try:
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Handle markdown code blocks
+            if response_text.startswith("```"):
+                import re
+                response_text = re.sub(r"```(?:json)?\n?", "", response_text)
+                response_text = response_text.rstrip("`").strip()
+
+            return json.loads(response_text)
+
+        except Exception as e:
+            logger.error(f"Failed to create execution plan: {e}")
+            # Fallback to basic plan
+            return {
+                "summary": f"Building {req.name} with {len(req.pages)} pages",
+                "tasks": [
+                    {
+                        "id": "task-1",
+                        "name": "Create project",
+                        "description": "Set up the complete project",
+                        "prompt": self._requirements_to_text(),
+                        "dependencies": [],
+                        "estimated_files": ["package.json", "src/*"],
+                    }
+                ],
+                "total_estimated_files": 10,
+                "build_command": "npm run build",
+            }
+
+    async def _execute_with_claude_code(
+        self, plan: dict[str, Any], workspace: str
+    ) -> dict[str, Any]:
+        """Execute tasks using real Claude Code sessions with streaming visibility.
+
+        Provides real-time progress output to the console as tasks execute.
+        """
+        from pathlib import Path
+
+        # Ensure workspace exists
+        workspace_path = Path(workspace)
+        workspace_path.mkdir(parents=True, exist_ok=True)
+
+        tasks = plan.get("tasks", [])
+        completed_tasks = []
+        files_created = []
+        errors = []
+        start_time = datetime.utcnow()
+
+        # Print execution header
+        print("\n" + "=" * 70)
+        print("  🚀 KAPPA OS - EXECUTION STARTED")
+        print("=" * 70)
+        print(f"  Project: {plan.get('project_name', 'Unknown')}")
+        print(f"  Workspace: {workspace_path}")
+        print(f"  Total Tasks: {len(tasks)}")
+        print("=" * 70 + "\n")
+
+        for i, task in enumerate(tasks, 1):
+            task_name = task.get("name", f"Task {i}")
+            task_prompt = task.get("prompt", "")
+
+            # Print task header with visual separator
+            print(f"\n{'─' * 60}")
+            print(f"  📋 TASK {i}/{len(tasks)}: {task_name}")
+            print(f"{'─' * 60}")
+            logger.info(f"Executing task {i}/{len(tasks)}: {task_name}")
+
+            try:
+                # Execute with Claude Code CLI
+                result = await self._run_claude_code_session(
+                    task_id=task.get("id", f"task-{i}"),
+                    prompt=task_prompt,
+                    workspace=str(workspace_path),
+                )
+
+                if result.get("success"):
+                    completed_tasks.append(task_name)
+                    task_files = result.get("files", [])
+                    files_created.extend(task_files)
+
+                    # Print success with file info
+                    print(f"  ✓ COMPLETED: {task_name}")
+                    if task_files:
+                        print("    Files created/modified:")
+                        for f in task_files[:5]:  # Show first 5 files
+                            print(f"      - {f}")
+                        if len(task_files) > 5:
+                            print(f"      ... and {len(task_files) - 5} more")
+
+                    # Show snippet of output if available
+                    output = result.get("output", "")
+                    if output:
+                        snippet = output[:300].strip()
+                        if snippet:
+                            print("    Output preview:")
+                            for line in snippet.split("\n")[:5]:
+                                print(f"      {line[:70]}")
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    errors.append(f"{task_name}: {error_msg}")
+                    print(f"  ✗ FAILED: {task_name}")
+                    print(f"    Error: {error_msg[:150]}")
+
+            except Exception as e:
+                errors.append(f"{task_name}: {str(e)}")
+                print(f"  ✗ EXCEPTION: {task_name}")
+                print(f"    {str(e)[:150]}")
+                logger.error(f"Task {task_name} failed: {e}")
+
+            # Print progress bar
+            percent = int(i / len(tasks) * 100)
+            bar_filled = int(30 * i / len(tasks))
+            bar = "█" * bar_filled + "░" * (30 - bar_filled)
+            print(f"\n  Progress: [{bar}] {percent}% ({i}/{len(tasks)} tasks)\n")
+
+        # Calculate duration
+        end_time = datetime.utcnow()
+        duration = (end_time - start_time).total_seconds()
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+
+        # Print execution summary
+        print("\n" + "=" * 70)
+        print("  📊 EXECUTION SUMMARY")
+        print("=" * 70)
+
+        # Determine overall status
+        if len(completed_tasks) == len(tasks):
+            status = "completed"
+            message = "All tasks completed successfully!"
+            print("  Status: ✓ COMPLETED")
+        elif len(completed_tasks) > 0:
+            status = "partial"
+            message = f"Completed {len(completed_tasks)}/{len(tasks)} tasks."
+            print(f"  Status: ⚠️  PARTIAL ({len(completed_tasks)}/{len(tasks)})")
+        else:
+            status = "failed"
+            message = "No tasks completed successfully."
+            print("  Status: ✗ FAILED")
+
+        print(f"  Duration: {minutes}m {seconds}s")
+        print(f"  Tasks Completed: {len(completed_tasks)}/{len(tasks)}")
+        print(f"  Files Created: {len(set(files_created))}")
+
+        if errors:
+            print(f"\n  Errors ({len(errors)}):")
+            for err in errors[:5]:
+                print(f"    - {err[:60]}")
+            if len(errors) > 5:
+                print(f"    ... and {len(errors) - 5} more errors")
+
+        print("=" * 70 + "\n")
+
+        return {
+            "status": status,
+            "message": message,
+            "workspace_path": str(workspace_path),
+            "completed_tasks": completed_tasks,
+            "files_created": list(set(files_created)),
+            "errors": errors,
+            "duration_seconds": duration,
+        }
+
+    async def _run_claude_code_session(
+        self, task_id: str, prompt: str, workspace: str
+    ) -> dict[str, Any]:
+        """Run a single Claude Code session for a task."""
+        import shutil
+
+        # Check if claude CLI is available
+        claude_path = shutil.which("claude")
+        if not claude_path:
+            # Fallback: use Claude API directly to generate code
+            return await self._generate_code_with_api(prompt, workspace)
+
+        try:
+            # Build claude command
+            cmd = [
+                claude_path,
+                "--print",
+                "--output-format", "text",
+                "--max-turns", "50",
+                "-p", prompt,
+            ]
+
+            # Check for dangerously-skip-permissions flag availability
+            # (only use in development)
+            import os
+            if os.environ.get("KAPPA_SKIP_PERMISSIONS"):
+                cmd.append("--dangerously-skip-permissions")
+
+            logger.debug(f"Running Claude Code: {' '.join(cmd[:5])}...")
+
+            # Run claude code
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=workspace,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=300  # 5 minute timeout per task
+            )
+
+            output = stdout.decode("utf-8", errors="replace")
+            error_output = stderr.decode("utf-8", errors="replace")
+
+            if process.returncode == 0:
+                # Try to extract created files from output
+                files = self._extract_files_from_output(output, workspace)
+                return {
+                    "success": True,
+                    "output": output,
+                    "files": files,
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": error_output or "Process failed",
+                    "output": output,
+                }
+
+        except TimeoutError:
+            return {"success": False, "error": "Task timed out after 5 minutes"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _generate_code_with_api(
+        self, prompt: str, workspace: str
+    ) -> dict[str, Any]:
+        """Fallback: Generate code using Claude API when CLI unavailable."""
+        if not self.claude_client:
+            return {"success": False, "error": "Claude API not available"}
+
+        try:
+            full_prompt = f"""You are a code generator. Generate the code for this task.
+
+Task: {prompt}
+
+Workspace: {workspace}
+
+For each file you create, format it as:
+=== FILE: path/to/file.ext ===
+<file contents>
+=== END FILE ===
+
+Generate all necessary files to complete the task."""
+
+            response = await self.claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=8000,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+
+            output = response.content[0].text
+
+            # Parse and write files
+            files = await self._parse_and_write_files(output, workspace)
+
+            return {
+                "success": True,
+                "output": output,
+                "files": files,
+            }
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _parse_and_write_files(
+        self, output: str, workspace: str
+    ) -> list[str]:
+        """Parse Claude's output and write files to workspace."""
+        import re
+        from pathlib import Path
+
+        files_written = []
+        workspace_path = Path(workspace)
+
+        # Pattern to match file blocks
+        pattern = r"=== FILE: (.+?) ===\n(.*?)\n=== END FILE ==="
+        matches = re.findall(pattern, output, re.DOTALL)
+
+        for file_path, content in matches:
+            file_path = file_path.strip()
+            full_path = workspace_path / file_path
+
+            # Create directories
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write file
+            full_path.write_text(content.strip())
+            files_written.append(file_path)
+            logger.info(f"Created: {file_path}")
+
+        return files_written
+
+    def _extract_files_from_output(self, output: str, workspace: str) -> list[str]:
+        """Extract list of files that were created/modified from Claude output."""
+        from pathlib import Path
+
+        files = []
+        workspace_path = Path(workspace)
+
+        # Look for file patterns in output
+        import re
+        patterns = [
+            r"Created[:\s]+([^\n]+)",
+            r"Wrote[:\s]+([^\n]+)",
+            r"Modified[:\s]+([^\n]+)",
+            r"File[:\s]+([^\n]+\.(?:py|js|ts|tsx|jsx|json|md|html|css|yml|yaml))",
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, output, re.IGNORECASE)
+            for match in matches:
+                cleaned = match.strip().strip("`'\"")
+                if cleaned and not cleaned.startswith("/"):
+                    files.append(cleaned)
+
+        # Also scan workspace for recently created files
+        if workspace_path.exists():
+            for f in workspace_path.rglob("*"):
+                if f.is_file() and not f.name.startswith("."):
+                    rel_path = str(f.relative_to(workspace_path))
+                    if rel_path not in files:
+                        files.append(rel_path)
+
+        return files[:50]  # Limit to 50 files
+
+    def _format_tasks(self, tasks: list[dict[str, Any]]) -> str:
+        """Format task list for display."""
+        if not tasks:
+            return "- No tasks defined"
+
+        lines = []
+        for i, task in enumerate(tasks, 1):
+            name = task.get("name", f"Task {i}")
+            desc = task.get("description", "")
+            lines.append(f"{i}. **{name}** - {desc}")
+
+        return "\n".join(lines)
+
+    async def _execute_project(self) -> None:
+        """Legacy method - execution now happens in _start_execution."""
+        # This method is kept for backwards compatibility
+        # but execution is now handled synchronously in _start_execution
+        pass
 
     async def _handle_execution_query(self, user_input: str) -> str:
         """Handle questions during execution."""
@@ -551,13 +968,13 @@ Would you like to:
 - Start a new project?"""
 
         if "progress" in lower_input or "status" in lower_input:
-            return self._get_progress_summary()
+            return await self._get_progress_summary()
 
         elif any(word in lower_input for word in ["issue", "error", "problem"]):
-            return self._get_issues_summary()
+            return await self._get_issues_summary()
 
         elif "task" in lower_input:
-            return self._get_tasks_summary()
+            return await self._get_tasks_summary()
 
         else:
             return """I'm currently building your project!
@@ -1078,29 +1495,159 @@ Return ONLY valid JSON."""
 {integrations_text}
 """
 
-    def _get_progress_summary(self) -> str:
-        """Get current progress summary."""
-        # In production, query from database using project_id
-        return """**Current Progress:**
+    async def _get_progress_summary(self) -> str:
+        """Get REAL progress summary from database."""
+        if not self.state.project_id:
+            return "**Progress:** No active build."
 
-Building... Please wait.
+        try:
+            from sqlalchemy import func, select
 
-The dashboard shows real-time updates."""
+            from src.knowledge import get_db_session
+            from src.knowledge.models import Project, Task
 
-    def _get_issues_summary(self) -> str:
-        """Get issues summary."""
-        return """**Issues Status:**
+            async with get_db_session() as db:
+                # Get project status
+                project_result = await db.execute(
+                    select(Project).where(Project.id == self.state.project_id)
+                )
+                project = project_result.scalar_one_or_none()
 
-No critical issues detected.
+                if not project:
+                    return "**Progress:** Project not found."
 
-All systems running smoothly."""
+                # Count tasks by status
+                task_counts = await db.execute(
+                    select(Task.status, func.count(Task.id))
+                    .where(Task.project_id == self.state.project_id)
+                    .group_by(Task.status)
+                )
+                counts: dict[str, int] = {row[0]: row[1] for row in task_counts.fetchall()}
 
-    def _get_tasks_summary(self) -> str:
-        """Get tasks summary."""
-        return """**Task Summary:**
+                total = sum(counts.values())
+                completed = counts.get("completed", 0)
+                running = counts.get("running", 0)
+                pending = counts.get("pending", 0)
+                failed = counts.get("failed", 0)
 
-Tasks are being executed in parallel.
-Check the dashboard for detailed progress."""
+                percent = int((completed / total * 100) if total > 0 else 0)
+
+                # Build progress bar
+                bar_length = 20
+                filled = int(bar_length * percent / 100)
+                bar = "█" * filled + "░" * (bar_length - filled)
+
+                return f"""**Current Progress:**
+
+Project: {project.name}
+Status: {project.status.upper()}
+Progress: [{bar}] {percent}%
+
+Tasks: {completed}/{total} completed
+- Running: {running}
+- Pending: {pending}
+- Failed: {failed}
+"""
+        except Exception as e:
+            logger.warning(f"Failed to get progress from database: {e}")
+            return f"**Progress:** Unable to query database: {e}"
+
+    async def _get_issues_summary(self) -> str:
+        """Get REAL issues summary from database."""
+        if not self.state.project_id:
+            return "**Issues:** No active build."
+
+        try:
+            from sqlalchemy import select
+
+            from src.knowledge import get_db_session
+            from src.knowledge.models import Task
+
+            async with get_db_session() as db:
+                # Get failed tasks
+                failed_result = await db.execute(
+                    select(Task)
+                    .where(Task.project_id == self.state.project_id)
+                    .where(Task.status == "failed")
+                )
+                failed_tasks = failed_result.scalars().all()
+
+                if not failed_tasks:
+                    return """**Issues Status:**
+
+✓ No critical issues detected.
+All tasks executing normally."""
+
+                issues = []
+                for task in failed_tasks:
+                    error_msg = task.error[:100] if task.error else "Unknown error"
+                    issues.append(f"- {task.name}: {error_msg}")
+
+                return f"""**Issues Status:**
+
+⚠️  {len(failed_tasks)} task(s) failed:
+
+{chr(10).join(issues)}
+"""
+        except Exception as e:
+            logger.warning(f"Failed to get issues from database: {e}")
+            return f"**Issues:** Unable to query database: {e}"
+
+    async def _get_tasks_summary(self) -> str:
+        """Get REAL tasks summary from database."""
+        if not self.state.project_id:
+            return "**Tasks:** No active build."
+
+        try:
+            from sqlalchemy import select
+
+            from src.knowledge import get_db_session
+            from src.knowledge.models import Task
+
+            async with get_db_session() as db:
+                # Get all tasks ordered by wave
+                result = await db.execute(
+                    select(Task)
+                    .where(Task.project_id == self.state.project_id)
+                    .order_by(Task.wave, Task.created_at)
+                )
+                tasks = result.scalars().all()
+
+                if not tasks:
+                    return "**Tasks:** No tasks found."
+
+                # Group by wave
+                waves: dict[int, list[Any]] = {}
+                for task in tasks:
+                    wave = task.wave or 0
+                    if wave not in waves:
+                        waves[wave] = []
+                    waves[wave].append(task)
+
+                # Status icons
+                status_icons = {
+                    "completed": "✓",
+                    "running": "⟳",
+                    "pending": "○",
+                    "failed": "✗",
+                    "skipped": "⊘",
+                }
+
+                lines = ["**Task Summary:**\n"]
+                for wave_num in sorted(waves.keys()):
+                    wave_tasks = waves[wave_num]
+                    completed = sum(1 for t in wave_tasks if t.status == "completed")
+                    lines.append(f"\n**Wave {wave_num}:** ({completed}/{len(wave_tasks)} done)")
+
+                    for task in wave_tasks:
+                        icon = status_icons.get(task.status, "?")
+                        lines.append(f"  {icon} {task.name}")
+
+                return "\n".join(lines)
+
+        except Exception as e:
+            logger.warning(f"Failed to get tasks from database: {e}")
+            return f"**Tasks:** Unable to query database: {e}"
 
     async def _deploy_project(self) -> str:
         """Deploy project to Vercel."""

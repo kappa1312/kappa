@@ -663,9 +663,18 @@ class TerminalSession(BaseSession):
             self._client = ClaudeSDKClient(options=options)
             logger.debug(f"Session {self.id} client initialized")
 
-        except ImportError:
-            logger.warning("claude_agent_sdk not available, using mock client")
-            self._client = MockClaudeClient()
+        except ImportError as ie:
+            # DO NOT silently fall back to mock - this is production code
+            logger.error(
+                "claude_agent_sdk not installed. Install with: pip install claude-agent-sdk"
+            )
+            logger.error(
+                "Kappa OS requires Claude Agent SDK for terminal sessions. "
+                "Sessions will fail without it."
+            )
+            raise RuntimeError(
+                "Claude Agent SDK not available. Install with: pip install claude-agent-sdk"
+            ) from ie
 
         except Exception as e:
             logger.error(f"Failed to initialize session {self.id}: {e}")

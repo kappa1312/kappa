@@ -102,9 +102,21 @@ Return ONLY valid JSON, no additional text."""
             try:
                 return await self._parse_with_api(requirements_text)
             except Exception as e:
-                logger.warning(f"Claude API parsing failed: {e}, using fallback")
+                logger.warning(f"Claude API parsing failed: {e}")
+                logger.warning(
+                    "⚠️  FALLING BACK TO KEYWORD PARSING - Results may be incomplete. "
+                    "Ensure ANTHROPIC_API_KEY is set for best results."
+                )
+                # Fall through to keyword parsing with warning
+                result = self._parse_with_keywords(requirements_text)
+                # Mark that this used fallback parsing
+                result.metadata = result.metadata or {}
+                result.metadata["parsing_method"] = "keyword_fallback"
+                result.metadata["fallback_reason"] = str(e)
+                return result
 
-        # Fallback to keyword-based parsing
+        # Explicitly requested keyword-based parsing
+        logger.info("Using keyword-based parsing (API disabled)")
         return self._parse_with_keywords(requirements_text)
 
     async def _parse_with_api(self, text: str) -> ProjectRequirements:
